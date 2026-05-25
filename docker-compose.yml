@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - .env
     environment:
       LLM_API_URL: ${LLM_API_URL:-}
       LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}

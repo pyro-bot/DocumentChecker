@@ -1,11 +1,19 @@
 import logging
+import re
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi.responses import FileResponse
 
 from .schemas import (
+    AdminUserResponse,
+    AdminUsersResponse,
+    CheckHistoryItem,
+    CheckHistoryResponse,
     DEFAULT_LLM_MODEL,
     CompareRequest,
     CompareResponse,
@@ -22,7 +30,7 @@ from .schemas import (
     UsageResetResponse,
     UserResponse,
 )
-from ..database import ModelUsageRepository, UserRecord
+from ..database import CheckHistoryRecord, CheckHistoryRepository, ModelUsageRepository, UserRecord, UserRepository
 from ..services.auth import (
     AuthService,
     ExternalAuthError,
@@ -35,10 +43,12 @@ from ..services.auth import (
 from ..services.comparator import ComparatorService
 from ..services.converter import ConverterService
 from ..services.model_config import ModelDefinition, ModelsConfigError, default_model_id, load_models_config
+from ..services.reports import generate_pdf_report
 from ..services.templates import TemplateService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+CHECK_FILES_DIR = Path(__file__).resolve().parents[3] / "data" / "check_files"
 
 
 def _upload_meta(file: UploadFile) -> dict:
@@ -83,6 +93,21 @@ def _model_response(model: ModelDefinition, user: UserRecord) -> ModelResponse:
     )
 
 
+def _history_item(record: CheckHistoryRecord) -> CheckHistoryItem:
+    return CheckHistoryItem(
+        id=record.id,
+        user_email=record.user_email,
+        document_name=record.document_name,
+        template_name=record.template_name,
+        model_id=record.model_id,
+        compliance_score=record.compliance_score,
+        errors_count=record.errors_count,
+        result=record.result,
+        source_available=bool(record.source_file_path and Path(record.source_file_path).exists()),
+        created_at=record.created_at,
+    )
+
+
 def _get_model_or_400(model_id: str) -> ModelDefinition:
     try:
         config = load_models_config()
@@ -102,6 +127,28 @@ def _consume_model_usage(user: UserRecord, model: ModelDefinition) -> None:
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Usage limit exceeded for model: {model.id}",
         )
+
+
+def _safe_filename(filename: str) -> str:
+    cleaned = re.sub(r"[^A-Za-zА-Яа-я0-9._-]+", "_", filename).strip("._")
+    return cleaned or "document.docx"
+
+
+def _store_source_file(path: Path, original_filename: str) -> str:
+    CHECK_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    target = CHECK_FILES_DIR / f"{uuid.uuid4()}_{_safe_filename(original_filename)}"
+    shutil.copyfile(path, target)
+    return str(target)
+
+
+def _require_history_access(record: CheckHistoryRecord, user: UserRecord) -> None:
+    if record.user_email != user.email and user_role(user) != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+
+def _download_filename(prefix: str, name: str, suffix: str) -> str:
+    stem = Path(name).stem or prefix
+    return f"{prefix}_{stem}{suffix}"
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -163,6 +210,49 @@ async def list_templates(current_user: UserRecord = Depends(get_current_user)):
     )
 
 
+@router.get("/api/history", response_model=CheckHistoryResponse)
+async def list_check_history(current_user: UserRecord = Depends(get_current_user)):
+    checks = CheckHistoryRepository().list_for_user(current_user.email)
+    return CheckHistoryResponse(checks=[_history_item(check) for check in checks])
+
+
+@router.get("/api/history/{check_id}/report.pdf")
+async def download_check_report(
+    check_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    record = CheckHistoryRepository().get_by_id(check_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Check result not found")
+    _require_history_access(record, current_user)
+
+    filename = _download_filename("report", record.document_name, ".pdf")
+    return Response(
+        content=generate_pdf_report(record),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/api/history/{check_id}/source")
+async def download_source_file(
+    check_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    record = CheckHistoryRepository().get_by_id(check_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Check result not found")
+    _require_history_access(record, current_user)
+    if not record.source_file_path or not Path(record.source_file_path).exists():
+        raise HTTPException(status_code=404, detail="Source file not found")
+
+    return FileResponse(
+        record.source_file_path,
+        media_type=record.source_content_type or "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=record.document_name,
+    )
+
+
 @router.post("/api/admin/templates", response_model=TemplateResponse)
 async def upload_template(
     template_file: UploadFile = File(...),
@@ -177,6 +267,41 @@ async def upload_template(
         raise HTTPException(status_code=500, detail="Failed to save template") from exc
 
     return TemplateResponse(id=template.id, name=template.name, size=template.size)
+
+
+@router.get("/api/admin/users", response_model=AdminUsersResponse)
+async def list_admin_users(current_admin: UserRecord = Depends(get_current_admin)):
+    users = UserRepository().list_users_with_check_stats()
+    return AdminUsersResponse(
+        users=[
+            AdminUserResponse(
+                email=user["email"],
+                redirect=user["redirect"],
+                role=user_role(
+                    UserRecord(
+                        email=user["email"],
+                        redirect=user["redirect"],
+                        created_at=user["created_at"],
+                        updated_at=user["updated_at"],
+                        last_login_at=user["last_login_at"],
+                    )
+                ),
+                last_login_at=user["last_login_at"],
+                check_count=user["check_count"],
+                latest_check_at=user["latest_check_at"],
+            )
+            for user in users
+        ]
+    )
+
+
+@router.get("/api/admin/checks", response_model=CheckHistoryResponse)
+async def list_admin_checks(
+    user_email: str | None = None,
+    current_admin: UserRecord = Depends(get_current_admin),
+):
+    checks = CheckHistoryRepository().list_all(user_email=user_email)
+    return CheckHistoryResponse(checks=[_history_item(check) for check in checks])
 
 
 @router.post("/api/admin/usage/reset", response_model=UsageResetResponse)
@@ -244,6 +369,19 @@ async def compare_documents(
             errors=errors,
             compliance_score=data.get("compliance_score", 0),
             summary=data.get("summary", ""),
+            check_id=CheckHistoryRepository().create(
+                user_email=current_user.email,
+                document_name="text-input",
+                template_name="text-input",
+                model_id=model.id,
+                result={
+                    "errors": [error.model_dump() for error in errors],
+                    "compliance_score": data.get("compliance_score", 0),
+                    "summary": data.get("summary", ""),
+                },
+                source_file_path=None,
+                source_content_type=None,
+            ).id,
         )
     except HTTPException:
         raise
@@ -323,6 +461,21 @@ async def validate_and_compare(
 
             data = result["data"]
             errors = _error_items(data)
+            result_payload = {
+                "errors": [error.model_dump() for error in errors],
+                "compliance_score": data.get("compliance_score", 0),
+                "summary": data.get("summary", ""),
+            }
+            source_path = _store_source_file(doc_path, document_file.filename)
+            history_record = CheckHistoryRepository().create(
+                user_email=current_user.email,
+                document_name=document_file.filename,
+                template_name=template_name or (template_file.filename if template_file else None),
+                model_id=selected_model.id,
+                result=result_payload,
+                source_file_path=source_path,
+                source_content_type=document_file.content_type,
+            )
 
             logger.info(
                 "validate-upload finished: errors=%s compliance_score=%s",
@@ -333,6 +486,7 @@ async def validate_and_compare(
                 errors=errors,
                 compliance_score=data.get("compliance_score", 0),
                 summary=data.get("summary", ""),
+                check_id=history_record.id,
             )
     except HTTPException:
         raise

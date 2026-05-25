@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,7 @@ class CompareResponse(BaseModel):
     errors: List[ErrorItem]
     compliance_score: int
     summary: str
+    check_id: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -91,3 +92,33 @@ class UsageResetRequest(BaseModel):
 
 class UsageResetResponse(BaseModel):
     reset_records: int
+
+
+class CheckHistoryItem(BaseModel):
+    id: str
+    user_email: str
+    document_name: str
+    template_name: Optional[str] = None
+    model_id: str
+    compliance_score: int
+    errors_count: int
+    result: dict[str, Any]
+    source_available: bool
+    created_at: datetime
+
+
+class CheckHistoryResponse(BaseModel):
+    checks: List[CheckHistoryItem]
+
+
+class AdminUserResponse(BaseModel):
+    email: str
+    redirect: Optional[str] = None
+    role: Literal["admin", "user"] = "user"
+    last_login_at: datetime
+    check_count: int = 0
+    latest_check_at: Optional[datetime] = None
+
+
+class AdminUsersResponse(BaseModel):
+    users: List[AdminUserResponse]

@@ -161,12 +161,16 @@
         </div>
 
         <div v-if="currentUser?.role === 'admin'" class="mb-5 flex flex-wrap items-center gap-3">
-          <input
-            v-model.trim="adminResetUser"
+          <label class="text-base text-gray-500">Пользователь:</label>
+          <select
+            v-model="adminResetUser"
             class="text-base border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Логин пользователя"
-            type="text"
-          />
+          >
+            <option value="">Все пользователи</option>
+            <option v-for="user in adminUsers" :key="user.email" :value="user.email">
+              {{ user.email }} · {{ user.check_count || 0 }} проверок
+            </option>
+          </select>
           <button
             :disabled="adminResetLoading"
             class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
@@ -318,10 +322,243 @@
                     class="mt-4 text-base px-4 py-2 rounded-lg border border-gray-200 bg-white
                           hover:bg-gray-50 transition-colors text-gray-700"
                   >
-                    Скачать отчёт (JSON)
+                    Скачать отчёт (PDF)
                   </button>
                 </template>
               </div>
+            </div>
+          </div>
+        </template>
+
+        <template v-if="historyItems.length">
+          <hr class="border-gray-100 my-6" />
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <h2 class="text-base font-semibold">История моих проверок</h2>
+            <button
+              class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+              @click="loadHistory"
+            >
+              Обновить
+            </button>
+          </div>
+          <div class="border border-gray-200 rounded-xl overflow-hidden bg-white">
+            <div
+              v-for="item in historyItems"
+              :key="item.id"
+              class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0"
+            >
+              <div class="min-w-0">
+                <div class="text-base font-medium text-gray-800 break-all">{{ item.document_name }}</div>
+                <div class="text-lg text-gray-400">
+                  {{ formatDate(item.created_at) }} · {{ item.model_id }} · {{ item.compliance_score }}% · ошибок: {{ item.errors_count }}
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+                  @click="item.open = !item.open"
+                >
+                  {{ item.open ? 'Скрыть' : 'Открыть' }}
+                </button>
+                <button
+                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+                  @click="downloadHistoryReport(item)"
+                >
+                  PDF
+                </button>
+                <button
+                  :disabled="!item.source_available"
+                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40"
+                  @click="downloadHistorySource(item)"
+                >
+                  DOCX
+                </button>
+              </div>
+              <div v-if="item.open" class="w-full pt-3">
+                <div class="grid grid-cols-3 gap-3 mb-5">
+                  <div
+                    v-for="m in getMetrics(item.result || {})"
+                    :key="m.label"
+                    class="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3"
+                  >
+                    <div class="text-lg text-gray-400 mb-1">{{ m.label }}</div>
+                    <div class="text-2xl font-semibold text-gray-900">{{ m.value }}</div>
+                  </div>
+                </div>
+                <div
+                  v-if="!item.result?.errors?.length"
+                  class="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-base text-green-700"
+                >
+                  Ошибок не найдено — документ полностью соответствует шаблону.
+                </div>
+                <div v-else class="flex flex-col gap-2">
+                  <div v-for="(group, key) in item.groupedErrors" :key="key">
+                    <div v-if="group.errors.length" class="border border-gray-100 rounded-xl overflow-hidden">
+                      <button
+                        @click="group.open = !group.open"
+                        class="w-full flex items-center justify-between px-4 py-3 text-base font-medium bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+                      >
+                        <span class="flex items-center gap-2">
+                          {{ group.label }}
+                          <span class="text-lg font-normal bg-gray-200 text-gray-600 rounded-full px-2 py-0.5">
+                            {{ group.errors.length }}
+                          </span>
+                        </span>
+                        <span class="text-gray-400 text-lg">{{ group.open ? '▲' : '▼' }}</span>
+                      </button>
+                      <div v-if="group.open" class="p-3 flex flex-col gap-2 bg-white">
+                        <template v-for="sev in ['critical', 'high', 'medium', 'low']" :key="sev">
+                          <template v-if="bySev(group.errors, sev).length">
+                            <div class="text-lg font-semibold uppercase tracking-widest text-gray-400 mt-1">
+                              {{ sevEmoji(sev) }} {{ sev }}
+                            </div>
+                            <div
+                              v-for="err in bySev(group.errors, sev)"
+                              :key="err.description"
+                              class="rounded-lg border border-gray-100 border-l-4 px-3 py-2.5 bg-gray-50"
+                              :class="sevBorderClass(sev)"
+                            >
+                              <div class="text-base font-medium text-gray-800">{{ err.section || 'Общий' }}</div>
+                              <div class="text-lg text-gray-500 mt-0.5 leading-relaxed">{{ err.description }}</div>
+                            </div>
+                          </template>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template v-if="currentUser?.role === 'admin' && adminUsers.length">
+          <hr class="border-gray-100 my-6" />
+          <h2 class="text-base font-semibold mb-3">Пользователи</h2>
+          <div class="border border-gray-200 rounded-xl overflow-hidden bg-white">
+            <div
+              v-for="user in adminUsers"
+              :key="user.email"
+              class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0"
+            >
+              <div class="min-w-0">
+                <div class="text-base font-medium text-gray-800 break-all">{{ user.email }}</div>
+                <div class="text-lg text-gray-400">
+                  {{ user.role }} · вход: {{ formatDate(user.last_login_at) }}
+                </div>
+              </div>
+              <div class="text-base text-gray-600">
+                Проверок: {{ user.check_count || 0 }}
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template v-if="currentUser?.role === 'admin'">
+          <hr class="border-gray-100 my-6" />
+          <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <h2 class="text-base font-semibold">Проверки пользователей</h2>
+            <select
+              v-model="adminChecksUser"
+              class="text-base border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              @change="loadAdminChecks"
+            >
+              <option value="">Все пользователи</option>
+              <option v-for="user in adminUsers" :key="user.email" :value="user.email">
+                {{ user.email }}
+              </option>
+            </select>
+          </div>
+          <div class="border border-gray-200 rounded-xl overflow-hidden bg-white">
+            <div
+              v-for="item in adminChecks"
+              :key="item.id"
+              class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0"
+            >
+              <div class="min-w-0">
+                <div class="text-base font-medium text-gray-800 break-all">{{ item.document_name }}</div>
+              <div class="text-lg text-gray-400">
+                  {{ item.user_email }} · {{ formatDate(item.created_at) }} · {{ item.compliance_score }}% · ошибок: {{ item.errors_count }}
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+                  @click="item.open = !item.open"
+                >
+                  {{ item.open ? 'Скрыть' : 'Открыть' }}
+                </button>
+                <button
+                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+                  @click="downloadHistoryReport(item)"
+                >
+                  PDF
+                </button>
+                <button
+                  :disabled="!item.source_available"
+                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40"
+                  @click="downloadHistorySource(item)"
+                >
+                  DOCX
+                </button>
+              </div>
+              <div v-if="item.open" class="w-full pt-3">
+                <div class="grid grid-cols-3 gap-3 mb-5">
+                  <div
+                    v-for="m in getMetrics(item.result || {})"
+                    :key="m.label"
+                    class="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3"
+                  >
+                    <div class="text-lg text-gray-400 mb-1">{{ m.label }}</div>
+                    <div class="text-2xl font-semibold text-gray-900">{{ m.value }}</div>
+                  </div>
+                </div>
+                <div
+                  v-if="!item.result?.errors?.length"
+                  class="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-base text-green-700"
+                >
+                  Ошибок не найдено — документ полностью соответствует шаблону.
+                </div>
+                <div v-else class="flex flex-col gap-2">
+                  <div v-for="(group, key) in item.groupedErrors" :key="key">
+                    <div v-if="group.errors.length" class="border border-gray-100 rounded-xl overflow-hidden">
+                      <button
+                        @click="group.open = !group.open"
+                        class="w-full flex items-center justify-between px-4 py-3 text-base font-medium bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+                      >
+                        <span class="flex items-center gap-2">
+                          {{ group.label }}
+                          <span class="text-lg font-normal bg-gray-200 text-gray-600 rounded-full px-2 py-0.5">
+                            {{ group.errors.length }}
+                          </span>
+                        </span>
+                        <span class="text-gray-400 text-lg">{{ group.open ? '▲' : '▼' }}</span>
+                      </button>
+                      <div v-if="group.open" class="p-3 flex flex-col gap-2 bg-white">
+                        <template v-for="sev in ['critical', 'high', 'medium', 'low']" :key="sev">
+                          <template v-if="bySev(group.errors, sev).length">
+                            <div class="text-lg font-semibold uppercase tracking-widest text-gray-400 mt-1">
+                              {{ sevEmoji(sev) }} {{ sev }}
+                            </div>
+                            <div
+                              v-for="err in bySev(group.errors, sev)"
+                              :key="err.description"
+                              class="rounded-lg border border-gray-100 border-l-4 px-3 py-2.5 bg-gray-50"
+                              :class="sevBorderClass(sev)"
+                            >
+                              <div class="text-base font-medium text-gray-800">{{ err.section || 'Общий' }}</div>
+                              <div class="text-lg text-gray-500 mt-0.5 leading-relaxed">{{ err.description }}</div>
+                            </div>
+                          </template>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="!adminChecks.length" class="px-4 py-3 text-base text-gray-400">
+              Проверок пока нет.
             </div>
           </div>
         </template>
@@ -505,6 +742,10 @@ const loading       = ref(false)
 const progressLabel = ref('')
 const globalError   = ref('')
 const fileResults   = ref([])  // Array of { fileName, file, open, loading, error, result, groupedErrors }
+const historyItems  = ref([])
+const adminUsers    = ref([])
+const adminChecks   = ref([])
+const adminChecksUser = ref('')
 const adminResetUser = ref('')
 const adminResetLoading = ref(false)
 const adminResetMessage = ref('')
@@ -578,6 +819,11 @@ function getMetrics(result) {
   ]
 }
 
+function formatDate(value) {
+  if (!value) return ''
+  return new Date(value).toLocaleString()
+}
+
 function buildGroupedErrors(errors) {
   return reactive({
     structural: { label: 'Структура',      errors: errors.filter(e => e.error_type === 'structural'), open: false },
@@ -585,6 +831,15 @@ function buildGroupedErrors(errors) {
     content:    { label: 'Содержание',     errors: errors.filter(e => e.error_type === 'content'),    open: false },
     typography: { label: 'Типографика',    errors: errors.filter(e => e.error_type === 'typography'), open: false },
   })
+}
+
+function normalizeHistoryItem(item) {
+  return {
+    ...item,
+    open: Boolean(item.open),
+    result: item.result || { errors: [], compliance_score: item.compliance_score || 0, summary: '' },
+    groupedErrors: buildGroupedErrors(item.result?.errors || []),
+  }
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -628,7 +883,10 @@ async function loadCurrentUser() {
 }
 
 async function loadAppConfig() {
-  await Promise.all([loadModels(), loadTemplates()])
+  await Promise.all([loadModels(), loadTemplates(), loadHistory()])
+  if (currentUser.value?.role === 'admin') {
+    await loadAdminData()
+  }
 }
 
 async function loadModels() {
@@ -652,6 +910,32 @@ async function loadTemplates() {
   if (selectedTemplate.value && !templates.value.some((item) => item.id === selectedTemplate.value)) {
     selectedTemplate.value = ''
   }
+}
+
+async function loadHistory() {
+  const res = await authorizedFetch(apiUrl('/history'))
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
+  historyItems.value = (data.checks || []).map(normalizeHistoryItem)
+}
+
+async function loadAdminData() {
+  await Promise.all([loadAdminUsers(), loadAdminChecks()])
+}
+
+async function loadAdminUsers() {
+  const res = await authorizedFetch(apiUrl('/admin/users'))
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
+  adminUsers.value = data.users || []
+}
+
+async function loadAdminChecks() {
+  const suffix = adminChecksUser.value ? `?user_email=${encodeURIComponent(adminChecksUser.value)}` : ''
+  const res = await authorizedFetch(apiUrl(`/admin/checks${suffix}`))
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
+  adminChecks.value = (data.checks || []).map(normalizeHistoryItem)
 }
 
 async function login() {
@@ -708,6 +992,7 @@ async function resetUsageLimits() {
     if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
     adminResetMessage.value = `Сброшено записей: ${data.reset_records ?? 0}`
     await loadModels()
+    await loadAdminUsers().catch(() => {})
   } catch (e) {
     adminResetMessage.value = e.message || 'Не удалось сбросить лимиты'
   } finally {
@@ -763,6 +1048,10 @@ async function runCheck() {
   }
 
   await loadModels().catch(() => {})
+  await loadHistory().catch(() => {})
+  if (currentUser.value?.role === 'admin') {
+    await loadAdminData().catch(() => {})
+  }
   loading.value       = false
   progressLabel.value = 'Готово'
 }
@@ -796,8 +1085,12 @@ async function checkSingleFile(fr) {
   }
 }
 
-function downloadReport(fr) {
+async function downloadReport(fr) {
   if (!fr.result) return
+  if (fr.result.check_id) {
+    await downloadHistoryReport({ id: fr.result.check_id, document_name: fr.fileName })
+    return
+  }
   const report = {
     template:           selectedTemplate.value || files.template?.name,
     document:           fr.fileName,
@@ -813,6 +1106,52 @@ function downloadReport(fr) {
   })
   a.click()
   URL.revokeObjectURL(a.href)
+}
+
+async function downloadHistoryReport(item) {
+  try {
+    await downloadBlob(
+      apiUrl(`/history/${item.id}/report.pdf`),
+      `report_${(item.document_name || 'document').replace(/\.docx$/i, '')}.pdf`,
+    )
+  } catch (e) {
+    globalError.value = e.message || 'Не удалось скачать отчет'
+  }
+}
+
+async function downloadHistorySource(item) {
+  try {
+    await downloadBlob(
+      apiUrl(`/history/${item.id}/source`),
+      item.document_name || 'document.docx',
+    )
+  } catch (e) {
+    globalError.value = e.message || 'Не удалось скачать исходный файл'
+  }
+}
+
+async function downloadBlob(url, fallbackName) {
+  const res = await authorizedFetch(url)
+  const blob = await res.blob()
+  if (!res.ok) {
+    const message = await blob.text().catch(() => '')
+    throw new Error(message || `HTTP ${res.status}`)
+  }
+  const disposition = res.headers.get('content-disposition') || ''
+  const filename = parseDownloadFilename(disposition) || fallbackName
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: filename,
+  })
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+function parseDownloadFilename(disposition) {
+  const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utfMatch) return decodeURIComponent(utfMatch[1])
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i)
+  return plainMatch?.[1] || ''
 }
 
 onMounted(loadCurrentUser)

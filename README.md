@@ -31,14 +31,35 @@ VITE_API_BASE_URL=/api
 Models are configured in `models.yaml`, not in `.env`:
 ```yaml
 default_model: gpt-oss:120b-cloud
+
+endpoints:
+  - id: ollama-cloud
+    url: https://ollama.com/api/chat
+    api_format: ollama
+    api_key_env: OLLAMA_API_KEY
+
+  - id: openai-compatible
+    base_url: https://api.openai.com/v1
+    api_format: openai
+    api_key_env: OPENAI_API_KEY
+
 models:
   - id: gpt-oss:120b-cloud
+    request_model: gpt-oss:120b
+    endpoint: ollama-cloud
     name: GPT OSS 120B Cloud
     description: Default cloud model for document checks.
     usage_limit: 100
 ```
 
-`usage_limit` is the per-user number of checks allowed for the model. Use an empty value or omit it for an unlimited model.
+`usage_limit` is the per-user number of checks allowed for the model. Use an empty value or omit it for an unlimited model. `endpoints` can contain multiple LLM API URLs; every model can reference one endpoint with `endpoint`, and every endpoint can read its own key from `.env` through `api_key_env`.
+
+For Ollama Cloud direct API access, set the key in `.env`:
+```env
+OLLAMA_API_KEY=ollama-...
+```
+
+The public model id shown to users can stay `gpt-oss:120b-cloud`, while `request_model: gpt-oss:120b` is sent to `https://ollama.com/api/chat`.
 
 Predefined `.docx` templates can be placed into the `doctempletes` folder. Administrators can also upload templates from the web UI. The backend lists them through `/api/templates`, and users can select one instead of uploading a template file.
 
@@ -60,6 +81,8 @@ LLM_API_FORMAT=openai
 AI_PROXY_KEY=sk-...
 LLM_REQUESTS_PER_MINUTE=1
 ```
+
+Those legacy `LLM_API_*` values are still supported for models without an endpoint in `models.yaml`.
 
 For Timeweb AI Proxy:
 ```env

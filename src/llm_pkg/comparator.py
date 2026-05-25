@@ -2,11 +2,18 @@ import requests
 import json
 import os
 import logging
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 from .parser import parse_llm_response, create_error_response
 from .rate_limiter import llm_request_queue
+
+try:
+    from app.services.model_config import ModelsConfigError, load_models_config
+except Exception:  # pragma: no cover - keeps llm_pkg usable outside the FastAPI app
+    ModelsConfigError = Exception
+    load_models_config = None
 
 
 DEFAULT_LLM_API_URL = "http://localhost:11434/api/chat"
@@ -14,31 +21,79 @@ OPENAI_CHAT_COMPLETIONS_PATH = "/chat/completions"
 logger = logging.getLogger(__name__)
 
 
-def _get_llm_api_url() -> str:
+@dataclass(frozen=True)
+class LLMSettings:
+    model: str
+    url: str
+    api_format: str
+    api_key_env: str
+
+
+def _chat_completions_url(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}{OPENAI_CHAT_COMPLETIONS_PATH}"
+
+
+def _get_legacy_llm_api_url() -> str:
     api_url = os.getenv("LLM_API_URL")
     if api_url:
         return api_url
 
     base_url = os.getenv("LLM_API_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     if base_url:
-        return f"{base_url.rstrip('/')}{OPENAI_CHAT_COMPLETIONS_PATH}"
+        return _chat_completions_url(base_url)
 
     return DEFAULT_LLM_API_URL
 
 
-def _get_llm_api_format(url: str) -> str:
-    configured = os.getenv("LLM_API_FORMAT", "auto").strip().lower()
+def _get_llm_api_format(url: str, configured: str = "") -> str:
+    configured = (configured or os.getenv("LLM_API_FORMAT", "auto")).strip().lower()
     if configured in {"openai", "ollama"}:
         return configured
     return "openai" if url.rstrip("/").endswith(OPENAI_CHAT_COMPLETIONS_PATH) else "ollama"
 
 
-def _get_headers(api_format: str) -> dict:
+def _get_headers(api_format: str, api_key_env: str = "") -> dict:
     headers = {"Content-Type": "application/json"}
-    api_key = os.getenv("AI_PROXY_KEY")
-    if api_key and api_format == "openai":
+    api_key = os.getenv(api_key_env) if api_key_env else None
+    if not api_key and api_format == "openai":
+        api_key = os.getenv("AI_PROXY_KEY")
+    if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
+
+
+def _resolve_llm_settings(model: str) -> LLMSettings:
+    if load_models_config is not None:
+        try:
+            config = load_models_config()
+            model_config = config.get(model)
+            if model_config is not None:
+                endpoint = config.get_endpoint(model_config.endpoint_id) if model_config.endpoint_id else None
+                api_url = model_config.api_url or (endpoint.url if endpoint else "")
+                api_base_url = model_config.api_base_url or (endpoint.base_url if endpoint else "")
+                api_format = model_config.api_format or (endpoint.api_format if endpoint else "")
+                api_key_env = model_config.api_key_env or (endpoint.api_key_env if endpoint else "")
+
+                if api_url or api_base_url:
+                    url = api_url or _chat_completions_url(api_base_url)
+                    return LLMSettings(
+                        model=model_config.request_model,
+                        url=url,
+                        api_format=_get_llm_api_format(url, api_format),
+                        api_key_env=api_key_env,
+                    )
+        except ModelsConfigError:
+            raise
+        except Exception:
+            logger.exception("Unable to resolve model-specific LLM settings for model=%s", model)
+
+    url = _get_legacy_llm_api_url()
+    return LLMSettings(
+        model=model,
+        url=url,
+        api_format=_get_llm_api_format(url),
+        api_key_env="AI_PROXY_KEY" if _get_llm_api_format(url) == "openai" else "",
+    )
 
 
 def _extract_response_text(response_data: dict, api_format: str) -> str:
@@ -55,24 +110,28 @@ def _run_single_check(
     template: str,
     document: str,
     check_type: str,
-    model: str,
-    url: str,
-    api_format: str
+    settings: LLMSettings
 ) -> dict:
     user_prompt = build_user_prompt(template, document, check_type=check_type)
     
     payload = {
-        "model": model,
+        "model": settings.model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt}
         ],
-        "stream": False
+        "stream": False,
+        "prompt_cache_retention": "24h"
     }
     
     try:
-        llm_request_queue.wait_for_turn(model)
-        response = requests.post(url, json=payload, headers=_get_headers(api_format), timeout=1800)
+        llm_request_queue.wait_for_turn(settings.model)
+        response = requests.post(
+            settings.url,
+            json=payload,
+            headers=_get_headers(settings.api_format, settings.api_key_env),
+            timeout=1800,
+        )
         if not response.ok:
             return {
                 "check_type": check_type,
@@ -81,7 +140,7 @@ def _run_single_check(
             }
         
         response_data = response.json()
-        response_text = _extract_response_text(response_data, api_format)
+        response_text = _extract_response_text(response_data, settings.api_format)
         
         if not response_text:
             return {"check_type": check_type, "error": "Пустой ответ", "data": None}
@@ -93,9 +152,9 @@ def _run_single_check(
         logger.exception(
             "LLM check failed: check_type=%s model=%s api_format=%s url=%s",
             check_type,
-            model,
-            api_format,
-            url,
+            settings.model,
+            settings.api_format,
+            settings.url,
         )
         return {"check_type": check_type, "error": str(e), "data": None}
 
@@ -151,8 +210,7 @@ def _merge_results(structure: dict, content: dict, formatting: dict) -> dict:
 
 
 def compare_documents(template_content, document_content, model="gpt-oss:120b-cloud", parallel: bool = True):
-    url = _get_llm_api_url()
-    api_format = _get_llm_api_format(url)
+    settings = _resolve_llm_settings(model)
     check_types = ["structure", "content", "formatting"]
     
     if parallel:
@@ -164,9 +222,7 @@ def compare_documents(template_content, document_content, model="gpt-oss:120b-cl
                     template_content,
                     document_content,
                     ct,
-                    model,
-                    url,
-                    api_format
+                    settings
                 ): ct
                 for ct in check_types
             }
@@ -176,7 +232,7 @@ def compare_documents(template_content, document_content, model="gpt-oss:120b-cl
     else:
         results = {}
         for ct in check_types:
-            results[ct] = _run_single_check(template_content, document_content, ct, model, url, api_format)
+            results[ct] = _run_single_check(template_content, document_content, ct, settings)
     
     return _merge_results(
         structure=results.get("structure", {"check_type": "structure", "error": "Не выполнено", "data": None}),
