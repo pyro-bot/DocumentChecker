@@ -39,7 +39,7 @@ class LLMRequestQueue:
         wait_seconds = scheduled_at - now
         if wait_seconds > 0:
             logger.info(
-                "LLM request queued for %.1f seconds: model=%s rpm=%.2f",
+                "User LLM request queued for %.1f seconds: model=%s rpm=%.2f",
                 wait_seconds,
                 model,
                 requests_per_minute,

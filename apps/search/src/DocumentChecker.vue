@@ -84,6 +84,8 @@
             label="Шаблон (эталон)"
             icon="📄"
             :file="files.template"
+            :accept="TEMPLATE_FILE_ACCEPT"
+            :file-hint="TEMPLATE_FILE_HINT"
             @file-selected="onTemplateFileSelected"
             @file-removed="files.template = null"
           />
@@ -98,7 +100,7 @@
           />
         </div>
 
-        <div v-if="templates.length || currentUser?.role === 'admin'" class="mb-5 flex flex-wrap items-center gap-3">
+        <div v-if="templates.length" class="mb-5 flex flex-wrap items-center gap-3">
           <label v-if="templates.length" class="text-base text-gray-500">Готовый шаблон:</label>
           <select
             v-if="templates.length"
@@ -111,29 +113,30 @@
               {{ template.name }}
             </option>
           </select>
-          <template v-if="currentUser?.role === 'admin'">
-            <input
-              class="hidden"
-              ref="adminTemplateInput"
-              accept=".docx"
-              type="file"
-              @change="onAdminTemplateFileSelected"
-            />
-            <button
-              class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50"
-              @click="adminTemplateInput?.click()"
-            >
-              {{ adminTemplateFile ? adminTemplateFile.name : 'Выбрать шаблон' }}
-            </button>
-            <button
-              :disabled="!adminTemplateFile || adminTemplateUploadLoading"
-              class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
-              @click="uploadAdminTemplate"
-            >
-              {{ adminTemplateUploadLoading ? 'Загружаем...' : 'Загрузить шаблон' }}
-            </button>
-            <span v-if="adminTemplateUploadMessage" class="text-base text-gray-600">{{ adminTemplateUploadMessage }}</span>
-          </template>
+        </div>
+
+        <div v-if="currentUser?.role === 'admin'" class="mb-5 flex flex-wrap items-center gap-3">
+          <input
+            class="hidden"
+            ref="adminTemplateInput"
+            :accept="TEMPLATE_FILE_ACCEPT"
+            type="file"
+            @change="onAdminTemplateFileSelected"
+          />
+          <button
+            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50"
+            @click="adminTemplateInput?.click()"
+          >
+            {{ adminTemplateFile ? adminTemplateFile.name : 'Выбрать шаблон' }}
+          </button>
+          <button
+            :disabled="!adminTemplateFile || adminTemplateUploadLoading"
+            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+            @click="uploadAdminTemplate"
+          >
+            {{ adminTemplateUploadLoading ? 'Загружаем...' : 'Загрузить шаблон' }}
+          </button>
+          <span v-if="adminTemplateUploadMessage" class="text-base text-gray-600">{{ adminTemplateUploadMessage }}</span>
         </div>
 
         <!-- Controls -->
@@ -576,10 +579,17 @@
 <script setup>
 import { ref, reactive, computed, defineComponent, h, onMounted } from 'vue'
 
+const TEMPLATE_FILE_ACCEPT = '.docx,.md,.markdown'
+const TEMPLATE_FILE_HINT = '.docx, .md, .markdown'
+
+function isTemplateFileName(name) {
+  return /\.(docx|md|markdown)$/i.test(name || '')
+}
+
 // ── DropZone (single file, inline sub-component) ──────────────────────────────
 const DropZone = defineComponent({
   name: 'DropZone',
-  props: { label: String, icon: String, file: Object },
+  props: { label: String, icon: String, file: Object, accept: String, fileHint: String },
   emits: ['file-selected', 'file-removed'],
   setup(props, { emit }) {
     const dragOver = ref(false)
@@ -588,11 +598,11 @@ const DropZone = defineComponent({
     const onDrop = (e) => {
       dragOver.value = false
       const f = e.dataTransfer.files[0]
-      if (f?.name.endsWith('.docx')) emit('file-selected', f)
+      if (isTemplateFileName(f?.name)) emit('file-selected', f)
     }
     const onFile = (e) => {
       const f = e.target.files[0]
-      if (f) emit('file-selected', f)
+      if (isTemplateFileName(f?.name)) emit('file-selected', f)
     }
     const formatSize = (bytes) =>
       bytes < 1024 * 1024
@@ -615,7 +625,7 @@ const DropZone = defineComponent({
         onDrop,
         onClick: () => inputRef.value?.click(),
       }, [
-        h('input', { ref: inputRef, type: 'file', accept: '.docx', class: 'hidden', onChange: onFile }),
+        h('input', { ref: inputRef, type: 'file', accept: props.accept || '.docx', class: 'hidden', onChange: onFile }),
         props.file
           ? h('div', { class: 'flex flex-col items-center gap-1' }, [
               h('div', { class: 'text-2xl' }, '✅'),
@@ -629,7 +639,7 @@ const DropZone = defineComponent({
           : h('div', { class: 'flex flex-col items-center gap-1' }, [
               h('div', { class: 'text-2xl' }, props.icon),
               h('div', { class: 'text-base font-medium text-gray-700 mt-1' }, props.label),
-              h('div', { class: 'text-lg text-gray-400 mt-0.5' }, '.docx — перетащите или нажмите'),
+              h('div', { class: 'text-lg text-gray-400 mt-0.5' }, `${props.fileHint || '.docx'} - перетащите или нажмите`),
             ]),
       ])
     }
@@ -776,9 +786,9 @@ function onTemplateFileSelected(file) {
 function onAdminTemplateFileSelected(event) {
   const file = event.target.files?.[0] || null
   adminTemplateUploadMessage.value = ''
-  adminTemplateFile.value = file?.name.endsWith('.docx') ? file : null
+  adminTemplateFile.value = isTemplateFileName(file?.name) ? file : null
   if (file && !adminTemplateFile.value) {
-    adminTemplateUploadMessage.value = 'Можно загрузить только .docx'
+    adminTemplateUploadMessage.value = 'Можно загрузить только .docx, .md или .markdown'
   }
 }
 

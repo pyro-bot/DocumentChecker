@@ -11,6 +11,7 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       LLM_API_FORMAT: ${LLM_API_FORMAT:-auto}
       AI_PROXY_KEY: ${AI_PROXY_KEY:-}
+      NANOGPT_API_KEY: ${NANOGPT_API_KEY:-}
       MODELS_CONFIG_PATH: /app/models.yaml
       DOCTEMPLATES_DIR: /app/doctempletes
       ADMIN_LOGINS: ${ADMIN_LOGINS:-}

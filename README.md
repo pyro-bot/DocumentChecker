@@ -43,6 +43,11 @@ endpoints:
     api_format: openai
     api_key_env: OPENAI_API_KEY
 
+  - id: nanogpt
+    base_url: https://nano-gpt.com/api/v1
+    api_format: nanogpt
+    api_key_env: NANOGPT_API_KEY
+
 models:
   - id: gpt-oss:120b-cloud
     request_model: gpt-oss:120b
@@ -61,7 +66,22 @@ OLLAMA_API_KEY=ollama-...
 
 The public model id shown to users can stay `gpt-oss:120b-cloud`, while `request_model: gpt-oss:120b` is sent to `https://ollama.com/api/chat`.
 
-Predefined `.docx` templates can be placed into the `doctempletes` folder. Administrators can also upload templates from the web UI. The backend lists them through `/api/templates`, and users can select one instead of uploading a template file.
+For NanoGPT, generate an API key at `https://nano-gpt.com/api`, set it in `.env`, and add models to `models.yaml` with `endpoint: nanogpt`:
+```env
+NANOGPT_API_KEY=...
+```
+```yaml
+  - id: nanogpt/minimax-m2.7
+    request_model: minimax/minimax-m2.7
+    endpoint: nanogpt
+    name: NanoGPT Minimax M2.7
+    description: NanoGPT OpenAI-compatible model
+    usage_limit: 5
+```
+
+NanoGPT uses an OpenAI-compatible chat completions API at `https://nano-gpt.com/api/v1/chat/completions`; `request_model` should match the model id returned by NanoGPT, for example `minimax/minimax-m2.7`.
+
+Predefined `.docx`, `.md`, and `.markdown` templates can be placed into the `doctempletes` folder. Administrators can also upload templates from the web UI. The backend lists them through `/api/templates`, and users can select one instead of uploading a template file.
 
 Administrators are configured in `.env`:
 ```env

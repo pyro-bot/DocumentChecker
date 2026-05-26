@@ -11,6 +11,11 @@ endpoints:
     api_format: openai
     api_key_env: AI_PROXY_KEY
 
+  - id: nanogpt
+    base_url: https://nano-gpt.com/api/v1
+    api_format: nanogpt
+    api_key_env: NANOGPT_API_KEY
+
 models:
   - id: gpt-oss:120b-cloud
     request_model: gpt-oss:120b
@@ -23,10 +28,17 @@ models:
     endpoint: timeweb-openai
     name: Базовая модель
     description: Базовая модель
-    usage_limit: 5
+    usage_limit: 2
 
   - id: deepseek/deepseek-v4-flash
     endpoint: timeweb-openai
     name: Улучшенная модель
     description: Модель с большей точностью
-    usage_limit: 2
+    usage_limit: 1
+
+  # - id: nanogpt/minimax-m2.7
+  #   request_model: minimax/minimax-m2.7
+  #   endpoint: nanogpt
+  #   name: NanoGPT Minimax M2.7
+  #   description: NanoGPT OpenAI-compatible model
+  #   usage_limit: 5

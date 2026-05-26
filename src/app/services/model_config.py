@@ -161,7 +161,7 @@ def _parse_endpoints(raw_endpoints: Any) -> tuple[EndpointDefinition, ...]:
         seen.add(endpoint_id)
 
         api_format = str(item.get("api_format") or item.get("format") or "auto").strip().lower()
-        if api_format not in {"auto", "openai", "ollama"}:
+        if api_format not in {"auto", "openai", "ollama", "nanogpt"}:
             raise ModelsConfigError(f"Unsupported api_format for endpoint {endpoint_id}: {api_format}")
 
         endpoints.append(

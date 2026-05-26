@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 from .parser import parse_llm_response, create_error_response
-from .rate_limiter import llm_request_queue
 
 try:
     from app.services.model_config import ModelsConfigError, load_models_config
@@ -47,7 +46,7 @@ def _get_legacy_llm_api_url() -> str:
 
 def _get_llm_api_format(url: str, configured: str = "") -> str:
     configured = (configured or os.getenv("LLM_API_FORMAT", "auto")).strip().lower()
-    if configured in {"openai", "ollama"}:
+    if configured in {"openai", "ollama", "nanogpt"}:
         return configured
     return "openai" if url.rstrip("/").endswith(OPENAI_CHAT_COMPLETIONS_PATH) else "ollama"
 
@@ -55,11 +54,21 @@ def _get_llm_api_format(url: str, configured: str = "") -> str:
 def _get_headers(api_format: str, api_key_env: str = "") -> dict:
     headers = {"Content-Type": "application/json"}
     api_key = os.getenv(api_key_env) if api_key_env else None
-    if not api_key and api_format == "openai":
+    if not api_key and api_format == "nanogpt":
+        api_key = os.getenv("NANOGPT_API_KEY")
+    if not api_key and api_format in {"openai", "nanogpt"}:
         api_key = os.getenv("AI_PROXY_KEY")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
+
+
+def _default_api_key_env(api_format: str) -> str:
+    if api_format == "nanogpt":
+        return "NANOGPT_API_KEY"
+    if api_format == "openai":
+        return "AI_PROXY_KEY"
+    return ""
 
 
 def _resolve_llm_settings(model: str) -> LLMSettings:
@@ -88,16 +97,17 @@ def _resolve_llm_settings(model: str) -> LLMSettings:
             logger.exception("Unable to resolve model-specific LLM settings for model=%s", model)
 
     url = _get_legacy_llm_api_url()
+    api_format = _get_llm_api_format(url)
     return LLMSettings(
         model=model,
         url=url,
-        api_format=_get_llm_api_format(url),
-        api_key_env="AI_PROXY_KEY" if _get_llm_api_format(url) == "openai" else "",
+        api_format=api_format,
+        api_key_env=_default_api_key_env(api_format),
     )
 
 
 def _extract_response_text(response_data: dict, api_format: str) -> str:
-    if api_format == "openai":
+    if api_format in {"openai", "nanogpt"}:
         choices = response_data.get("choices") or []
         if not choices:
             return ""
@@ -121,11 +131,11 @@ def _run_single_check(
             {"role": "user", "content": user_prompt}
         ],
         "stream": False,
-        "prompt_cache_retention": "24h"
     }
+    if settings.api_format != "nanogpt":
+        payload["prompt_cache_retention"] = "24h"
     
     try:
-        llm_request_queue.wait_for_turn(settings.model)
         response = requests.post(
             settings.url,
             json=payload,

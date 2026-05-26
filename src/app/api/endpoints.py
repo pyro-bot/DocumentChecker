@@ -31,6 +31,7 @@ from .schemas import (
     UserResponse,
 )
 from ..database import CheckHistoryRecord, CheckHistoryRepository, ModelUsageRepository, UserRecord, UserRepository
+from llm_pkg.rate_limiter import llm_request_queue
 from ..services.auth import (
     AuthService,
     ExternalAuthError,
@@ -139,6 +140,28 @@ def _store_source_file(path: Path, original_filename: str) -> str:
     target = CHECK_FILES_DIR / f"{uuid.uuid4()}_{_safe_filename(original_filename)}"
     shutil.copyfile(path, target)
     return str(target)
+
+
+def _is_markdown_file(path: Path) -> bool:
+    return path.suffix.lower() in {".md", ".markdown"}
+
+
+def _read_markdown_template(path: Path) -> dict:
+    try:
+        return {
+            "success": True,
+            "latex_content": path.read_text(encoding="utf-8"),
+            "file_path": str(path),
+            "error": None,
+        }
+    except UnicodeDecodeError as exc:
+        logger.error("Markdown template read failed: %s", exc)
+        return {
+            "success": False,
+            "latex_content": None,
+            "file_path": None,
+            "error": "Markdown template must be UTF-8 encoded",
+        }
 
 
 def _require_history_access(record: CheckHistoryRecord, user: UserRecord) -> None:
@@ -351,6 +374,7 @@ async def compare_documents(
     try:
         model = _get_model_or_400(req.model)
         _consume_model_usage(current_user, model)
+        llm_request_queue.wait_for_turn(model.id)
         result = ComparatorService.compare(
             template_content=req.template_content,
             document_content=req.document_content,
@@ -436,8 +460,12 @@ async def validate_and_compare(
             tpl_tex = tmpdir / "template.tex"
             doc_tex = tmpdir / "document.tex"
 
-            logger.info("validate-upload converting template")
-            tpl_res = ConverterService.convert_docx_to_latex(str(tpl_path), str(tpl_tex), str(image_dir))
+            logger.info("validate-upload preparing template")
+            tpl_res = (
+                _read_markdown_template(tpl_path)
+                if _is_markdown_file(tpl_path)
+                else ConverterService.convert_docx_to_latex(str(tpl_path), str(tpl_tex), str(image_dir))
+            )
             if not tpl_res["success"]:
                 logger.error("Template conversion failed: %s", tpl_res["error"])
                 raise HTTPException(status_code=500, detail=f"Шаблон: {tpl_res['error']}")
@@ -449,6 +477,7 @@ async def validate_and_compare(
                 raise HTTPException(status_code=500, detail=f"Документ: {doc_res['error']}")
 
             logger.info("validate-upload comparing documents")
+            llm_request_queue.wait_for_turn(selected_model.id)
             result = ComparatorService.compare(
                 template_content=tpl_res["latex_content"],
                 document_content=doc_res["latex_content"],

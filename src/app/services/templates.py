@@ -7,7 +7,7 @@ from typing import BinaryIO
 
 
 DEFAULT_TEMPLATE_DIR = Path(__file__).resolve().parents[3] / "doctempletes"
-ALLOWED_TEMPLATE_SUFFIXES = {".docx"}
+ALLOWED_TEMPLATE_SUFFIXES = {".docx", ".md", ".markdown"}
 INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
@@ -77,7 +77,7 @@ class TemplateService:
 
         suffix = Path(raw_name).suffix.lower()
         if suffix not in ALLOWED_TEMPLATE_SUFFIXES:
-            raise ValueError("Only .docx templates are allowed")
+            raise ValueError("Only .docx, .md or .markdown templates are allowed")
 
         stem = Path(raw_name).stem.strip().strip(".")
         stem = INVALID_FILENAME_CHARS.sub("_", stem).strip()
