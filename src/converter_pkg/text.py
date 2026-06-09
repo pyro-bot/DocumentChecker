@@ -4,6 +4,15 @@ from pylatex import NoEscape
 from .utils import get_paragraph_alignment, latex_special_chars
 
 
+PARAGRAPH_FORMAT_FIELDS = {
+    'left_indent': 'Отступ слева',
+    'right_indent': 'Отступ справа',
+    'first_line_indent': 'Отступ первой строки',
+    'space_before': 'Интервал перед',
+    'space_after': 'Интервал после',
+}
+
+
 def are_runs_similar(run1, run2):
     if run1.bold != run2.bold:
         return False
@@ -99,6 +108,69 @@ def format_runs_in_paragraph(paragraph, escape_func):
     return text
 
 
+def get_effective_paragraph_format_value(paragraph, field_name):
+    value = getattr(paragraph.paragraph_format, field_name, None)
+    if value is not None:
+        return value
+
+    style = getattr(paragraph, 'style', None)
+    while style is not None:
+        paragraph_format = getattr(style, 'paragraph_format', None)
+        value = getattr(paragraph_format, field_name, None)
+        if value is not None:
+            return value
+        style = getattr(style, 'base_style', None)
+
+    return None
+
+
+def format_length_cm(value):
+    if value is None:
+        return None
+
+    if hasattr(value, 'cm'):
+        return round(value.cm, 2)
+
+    return value
+
+
+def format_length_pt(value):
+    if value is None:
+        return None
+
+    if hasattr(value, 'pt'):
+        return round(value.pt, 2)
+
+    return value
+
+
+def format_paragraph_metadata_comment(paragraph, paragraph_type='Абзац', level=None):
+    style_name = getattr(getattr(paragraph, 'style', None), 'name', None)
+    alignment = get_paragraph_alignment(paragraph)
+
+    metadata = [
+        f'Тип-{paragraph_type}',
+        f'Стиль-{style_name}',
+    ]
+    if level is not None:
+        metadata.append(f'Уровень-{level}')
+
+    metadata.append(f'Выравнивание-{alignment}')
+
+    for field_name, label in PARAGRAPH_FORMAT_FIELDS.items():
+        value = get_effective_paragraph_format_value(paragraph, field_name)
+        if field_name in {'space_before', 'space_after'}:
+            formatted_value = format_length_pt(value)
+            unit = 'пт' if formatted_value is not None else ''
+        else:
+            formatted_value = format_length_cm(value)
+            unit = 'см' if formatted_value is not None else ''
+
+        metadata.append(f'{label}-{formatted_value}{unit}')
+
+    return f"% Формат абзаца: {' '.join(metadata)} %\n"
+
+
 def parse_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate):
 
     if paragraphs.style.name.startswith("Heading"):
@@ -120,9 +192,12 @@ def parse_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate):
         else:
             latex_doc.append(NoEscape(f'\\paragraph{{{latex_special_chars(paragraphs.text)}}}'))
 
+        latex_doc.append(NoEscape(format_paragraph_metadata_comment(paragraphs, 'Заголовок', level)))
+
         return flag_itemize, flag_enumerate
 
     text = format_runs_in_paragraph(paragraphs, latex_special_chars)
+    paragraph_metadata = format_paragraph_metadata_comment(paragraphs)
 
     alignment = get_paragraph_alignment(paragraphs)
     if alignment == WD_ALIGN_PARAGRAPH.LEFT:
@@ -137,6 +212,7 @@ def parse_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate):
     if text.strip():
         latex_doc.append(NoEscape(f'\\begin{{{latex_alignment}}}'))
         latex_doc.append(NoEscape(text))
+        latex_doc.append(NoEscape(paragraph_metadata))
         latex_doc.append(NoEscape(f'\\end{{{latex_alignment}}}'))
 
     return flag_itemize, flag_enumerate
@@ -144,6 +220,7 @@ def parse_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate):
 
 def parse_list_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate):
     text = format_runs_in_paragraph(paragraphs, latex_special_chars)
+    paragraph_metadata = format_paragraph_metadata_comment(paragraphs, 'Список')
 
     if paragraphs.style.name == 'List Bullet':
         if not flag_itemize:
@@ -154,7 +231,7 @@ def parse_list_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate):
             flag_itemize = True
             latex_doc.append(NoEscape(r'\begin{itemize}'))
 
-        latex_doc.append(NoEscape(r'\item ' + text))
+        latex_doc.append(NoEscape(r'\item ' + text + paragraph_metadata))
     elif paragraphs.style.name in ['List Number', 'List Paragraph']:
         if not flag_enumerate:
             if flag_itemize:
@@ -163,6 +240,6 @@ def parse_list_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate):
 
             flag_enumerate = True
             latex_doc.append(NoEscape(r'\begin{enumerate}'))
-        latex_doc.append(NoEscape(r'\item ' + text))
+        latex_doc.append(NoEscape(r'\item ' + text + paragraph_metadata))
 
     return flag_itemize, flag_enumerate

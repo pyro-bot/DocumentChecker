@@ -35,6 +35,12 @@ models:
     name: Улучшенная модель
     description: Модель с большей точностью
     usage_limit: 1
+  
+  - id: dashscope/qwen3.6-plus
+    endpoint: timeweb-openai
+    name: Qwen
+    description: Qwen
+    usage_limit: 1
 
   # - id: nanogpt/minimax-m2.7
   #   request_model: minimax/minimax-m2.7
