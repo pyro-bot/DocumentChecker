@@ -4,9 +4,11 @@ import os
 import logging
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 from .parser import parse_llm_response, create_error_response
+from .context_window import fit_document_to_context
 
 try:
     from app.services.model_config import ModelsConfigError, load_models_config
@@ -18,6 +20,11 @@ except Exception:  # pragma: no cover - keeps llm_pkg usable outside the FastAPI
 DEFAULT_LLM_API_URL = "http://localhost:11434/api/chat"
 OPENAI_CHAT_COMPLETIONS_PATH = "/chat/completions"
 logger = logging.getLogger(__name__)
+TRUNCATION_WARNING = (
+    "Внимание: отчет был сокращен, потому что документ не помещался "
+    "в контекстное окно выбранной модели. Проверка выполнена только "
+    "по переданной части документа."
+)
 
 
 @dataclass(frozen=True)
@@ -26,6 +33,7 @@ class LLMSettings:
     url: str
     api_format: str
     api_key_env: str
+    context_window_tokens: Optional[int] = None
 
 
 def _chat_completions_url(base_url: str) -> str:
@@ -90,6 +98,7 @@ def _resolve_llm_settings(model: str) -> LLMSettings:
                         url=url,
                         api_format=_get_llm_api_format(url, api_format),
                         api_key_env=api_key_env,
+                        context_window_tokens=model_config.context_window_tokens,
                     )
         except ModelsConfigError:
             raise
@@ -103,6 +112,7 @@ def _resolve_llm_settings(model: str) -> LLMSettings:
         url=url,
         api_format=api_format,
         api_key_env=_default_api_key_env(api_format),
+        context_window_tokens=None,
     )
 
 
@@ -122,7 +132,27 @@ def _run_single_check(
     check_type: str,
     settings: LLMSettings
 ) -> dict:
-    user_prompt = build_user_prompt(template, document, check_type=check_type)
+    fitted_prompt = fit_document_to_context(
+        system_prompt=SYSTEM_PROMPT,
+        build_user_prompt=build_user_prompt,
+        template=template,
+        document=document,
+        check_type=check_type,
+        settings=settings,
+    )
+    if fitted_prompt.truncated:
+        logger.warning(
+            "Document truncated to fit model context: check_type=%s model=%s "
+            "original_tokens=%s final_tokens=%s document_budget=%s context_window=%s",
+            check_type,
+            settings.model,
+            fitted_prompt.original_document_tokens,
+            fitted_prompt.final_document_tokens,
+            fitted_prompt.document_token_budget,
+            fitted_prompt.max_context_tokens,
+        )
+
+    user_prompt = build_user_prompt(template, fitted_prompt.document, check_type=check_type)
     
     payload = {
         "model": settings.model,
@@ -146,17 +176,28 @@ def _run_single_check(
             return {
                 "check_type": check_type,
                 "error": f"HTTP {response.status_code}: {response.text[:500]}",
-                "data": None
+                "data": None,
+                "prompt_truncated": fitted_prompt.truncated,
             }
         
         response_data = response.json()
         response_text = _extract_response_text(response_data, settings.api_format)
         
         if not response_text:
-            return {"check_type": check_type, "error": "Пустой ответ", "data": None}
+            return {
+                "check_type": check_type,
+                "error": "Пустой ответ",
+                "data": None,
+                "prompt_truncated": fitted_prompt.truncated,
+            }
         
         parsed = parse_llm_response(response_text)
-        return {"check_type": check_type, "error": None, "data": parsed}
+        return {
+            "check_type": check_type,
+            "error": None,
+            "data": parsed,
+            "prompt_truncated": fitted_prompt.truncated,
+        }
         
     except Exception as e:
         logger.exception(
@@ -166,13 +207,21 @@ def _run_single_check(
             settings.api_format,
             settings.url,
         )
-        return {"check_type": check_type, "error": str(e), "data": None}
+        return {
+            "check_type": check_type,
+            "error": str(e),
+            "data": None,
+            "prompt_truncated": fitted_prompt.truncated,
+        }
 
 
 def _merge_results(structure: dict, content: dict, formatting: dict) -> dict:
     all_errors = []
     scores = {"structure": 100, "content": 100, "formatting": 100}
     summaries = []
+    warnings = []
+    if any(result.get("prompt_truncated") for result in [structure, content, formatting]):
+        warnings.append(TRUNCATION_WARNING)
     
     for result in [structure, content, formatting]:
         check_type = result["check_type"]
@@ -212,10 +261,15 @@ def _merge_results(structure: dict, content: dict, formatting: dict) -> dict:
             scores["formatting"] * 0.2
         )
     
+    summary = " | ".join(summaries)
+    if warnings:
+        summary = f"{' '.join(warnings)} {summary}".strip()
+
     return {
         "errors": all_errors,
         "compliance_score": final_score,
-        "summary": " | ".join(summaries)
+        "summary": summary,
+        "warnings": warnings,
     }
 
 

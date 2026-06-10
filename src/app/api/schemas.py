@@ -34,6 +34,7 @@ class CompareResponse(BaseModel):
     errors: List[ErrorItem]
     compliance_score: int
     summary: str
+    warnings: List[str] = Field(default_factory=list)
     check_id: Optional[str] = None
 
 
@@ -66,6 +67,7 @@ class ModelResponse(BaseModel):
     name: str
     description: str = ""
     usage_limit: Optional[int] = None
+    context_window_tokens: Optional[int] = None
     used_count: int = 0
     remaining: Optional[int] = None
 

@@ -271,6 +271,16 @@
                     </div>
                   </div>
 
+                  <!-- Warnings -->
+                  <div
+                    v-if="fr.result.warnings?.length"
+                    class="mb-5 px-4 py-3 rounded-lg bg-yellow-50 border border-yellow-200 text-base text-yellow-800"
+                  >
+                    <div v-for="warning in fr.result.warnings" :key="warning">
+                      {{ warning }}
+                    </div>
+                  </div>
+
                   <!-- No errors -->
                   <div
                     v-if="!fr.result.errors?.length"
@@ -386,6 +396,14 @@
                   >
                     <div class="text-lg text-gray-400 mb-1">{{ m.label }}</div>
                     <div class="text-2xl font-semibold text-gray-900">{{ m.value }}</div>
+                  </div>
+                </div>
+                <div
+                  v-if="item.result?.warnings?.length"
+                  class="mb-5 px-4 py-3 rounded-lg bg-yellow-50 border border-yellow-200 text-base text-yellow-800"
+                >
+                  <div v-for="warning in item.result.warnings" :key="warning">
+                    {{ warning }}
                   </div>
                 </div>
                 <div
@@ -514,6 +532,14 @@
                   >
                     <div class="text-lg text-gray-400 mb-1">{{ m.label }}</div>
                     <div class="text-2xl font-semibold text-gray-900">{{ m.value }}</div>
+                  </div>
+                </div>
+                <div
+                  v-if="item.result?.warnings?.length"
+                  class="mb-5 px-4 py-3 rounded-lg bg-yellow-50 border border-yellow-200 text-base text-yellow-800"
+                >
+                  <div v-for="warning in item.result.warnings" :key="warning">
+                    {{ warning }}
                   </div>
                 </div>
                 <div

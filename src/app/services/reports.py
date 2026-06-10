@@ -61,10 +61,20 @@ def _generate_reportlab_pdf(record: CheckHistoryRecord) -> bytes:
         Paragraph("Отчет о проверке документа", title_style),
         _metadata_table(record, normal_style, font_name),
         Spacer(1, 8),
-        Paragraph("Краткое заключение", heading_style),
-        Paragraph(_escape(result.get("summary") or "Заключение не указано."), normal_style),
-        Paragraph("Найденные ошибки", heading_style),
     ]
+    warnings = result.get("warnings") or []
+    if warnings:
+        story.append(Paragraph("Предупреждения", heading_style))
+        for warning in warnings:
+            story.append(Paragraph(_escape(warning), normal_style))
+
+    story.extend(
+        [
+            Paragraph("Краткое заключение", heading_style),
+            Paragraph(_escape(result.get("summary") or "Заключение не указано."), normal_style),
+            Paragraph("Найденные ошибки", heading_style),
+        ]
+    )
 
     errors = result.get("errors") or []
     if not errors:

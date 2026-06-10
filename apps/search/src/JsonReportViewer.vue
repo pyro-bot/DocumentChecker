@@ -114,6 +114,16 @@
                 </div>
               </div>
 
+              <!-- Warnings -->
+              <div
+                v-if="warnings.length"
+                class="mb-5 px-4 py-3 rounded-lg bg-yellow-50 border border-yellow-200 text-base text-yellow-800"
+              >
+                <div v-for="warning in warnings" :key="warning">
+                  {{ warning }}
+                </div>
+              </div>
+
               <!-- No errors -->
               <div
                 v-if="errors.length === 0"
@@ -191,6 +201,7 @@ const loadedFileName = ref('')
 const reportLoaded = computed(() => !!report.value)
 
 const errors = computed(() => report.value?.result?.errors ?? [])
+const warnings = computed(() => report.value?.result?.warnings ?? [])
 
 const metrics = computed(() => {
   const errs = errors.value

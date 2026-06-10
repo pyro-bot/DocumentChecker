@@ -89,6 +89,7 @@ def _model_response(model: ModelDefinition, user: UserRecord) -> ModelResponse:
         name=model.name,
         description=model.description,
         usage_limit=model.usage_limit,
+        context_window_tokens=model.context_window_tokens,
         used_count=used_count,
         remaining=remaining,
     )
@@ -393,6 +394,7 @@ async def compare_documents(
             errors=errors,
             compliance_score=data.get("compliance_score", 0),
             summary=data.get("summary", ""),
+            warnings=data.get("warnings", []),
             check_id=CheckHistoryRepository().create(
                 user_email=current_user.email,
                 document_name="text-input",
@@ -402,6 +404,7 @@ async def compare_documents(
                     "errors": [error.model_dump() for error in errors],
                     "compliance_score": data.get("compliance_score", 0),
                     "summary": data.get("summary", ""),
+                    "warnings": data.get("warnings", []),
                 },
                 source_file_path=None,
                 source_content_type=None,
@@ -494,6 +497,7 @@ async def validate_and_compare(
                 "errors": [error.model_dump() for error in errors],
                 "compliance_score": data.get("compliance_score", 0),
                 "summary": data.get("summary", ""),
+                "warnings": data.get("warnings", []),
             }
             source_path = _store_source_file(doc_path, document_file.filename)
             history_record = CheckHistoryRepository().create(
@@ -515,6 +519,7 @@ async def validate_and_compare(
                 errors=errors,
                 compliance_score=data.get("compliance_score", 0),
                 summary=data.get("summary", ""),
+                warnings=data.get("warnings", []),
                 check_id=history_record.id,
             )
     except HTTPException:

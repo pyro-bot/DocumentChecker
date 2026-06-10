@@ -55,9 +55,10 @@ models:
     name: GPT OSS 120B Cloud
     description: Default cloud model for document checks.
     usage_limit: 100
+    context_window_tokens: 131072
 ```
 
-`usage_limit` is the per-user number of checks allowed for the model. Use an empty value or omit it for an unlimited model. `endpoints` can contain multiple LLM API URLs; every model can reference one endpoint with `endpoint`, and every endpoint can read its own key from `.env` through `api_key_env`.
+`usage_limit` is the per-user number of checks allowed for the model. Use an empty value or omit it for an unlimited model. `context_window_tokens` is the model context length used to trim oversized documents before sending them to the LLM. You can also use `context_window`, `max_context_tokens`, or `max_context_window` as aliases. Context length priority is: model setting, `LLM_CONTEXT_WINDOW_TOKENS`, API metadata, then model family defaults. `endpoints` can contain multiple LLM API URLs; every model can reference one endpoint with `endpoint`, and every endpoint can read its own key from `.env` through `api_key_env`.
 
 For Ollama Cloud direct API access, set the key in `.env`:
 ```env
@@ -77,6 +78,7 @@ NANOGPT_API_KEY=...
     name: NanoGPT Minimax M2.7
     description: NanoGPT OpenAI-compatible model
     usage_limit: 5
+    context_window_tokens: 1000000
 ```
 
 NanoGPT uses an OpenAI-compatible chat completions API at `https://nano-gpt.com/api/v1/chat/completions`; `request_model` should match the model id returned by NanoGPT, for example `minimax/minimax-m2.7`.

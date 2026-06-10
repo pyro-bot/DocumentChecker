@@ -24,6 +24,7 @@ class ModelDefinition:
     name: str
     description: str
     usage_limit: Optional[int]
+    context_window_tokens: Optional[int]
     endpoint_id: Optional[str]
     request_model: str
     api_url: str
@@ -106,6 +107,21 @@ def _parse_models_config(raw: dict[str, Any]) -> ModelsConfig:
             if usage_limit < 0:
                 raise ModelsConfigError(f"usage_limit must be non-negative for model: {model_id}")
 
+        raw_context_window = next(
+            (
+                item[key]
+                for key in ("context_window_tokens", "context_window", "max_context_tokens", "max_context_window")
+                if key in item
+            ),
+            None,
+        )
+        if raw_context_window in (None, ""):
+            context_window_tokens = None
+        else:
+            context_window_tokens = int(raw_context_window)
+            if context_window_tokens <= 0:
+                raise ModelsConfigError(f"context_window_tokens must be positive for model: {model_id}")
+
         endpoint_id = item.get("endpoint") or item.get("endpoint_id")
         if endpoint_id is not None:
             endpoint_id = str(endpoint_id).strip()
@@ -120,6 +136,7 @@ def _parse_models_config(raw: dict[str, Any]) -> ModelsConfig:
                 name=str(item.get("name") or model_id),
                 description=str(item.get("description") or ""),
                 usage_limit=usage_limit,
+                context_window_tokens=context_window_tokens,
                 endpoint_id=endpoint_id,
                 request_model=str(item.get("request_model") or item.get("model") or model_id).strip(),
                 api_url=str(item.get("api_url") or item.get("url") or "").strip(),
