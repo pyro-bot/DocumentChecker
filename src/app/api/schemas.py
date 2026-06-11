@@ -81,10 +81,22 @@ class TemplateResponse(BaseModel):
     id: str
     name: str
     size: int
+    kind: Literal["docx", "markdown"] = "docx"
 
 
 class TemplatesResponse(BaseModel):
     templates: List[TemplateResponse]
+
+
+class TemplateMarkdownResponse(BaseModel):
+    id: str
+    name: str
+    content: str
+    size: int
+
+
+class TemplateMarkdownUpdateRequest(BaseModel):
+    content: str = Field(default="", description="Markdown template content")
 
 
 class UsageResetRequest(BaseModel):

@@ -25,6 +25,8 @@ from .schemas import (
     ModelResponse,
     ModelsResponse,
     TemplateResponse,
+    TemplateMarkdownResponse,
+    TemplateMarkdownUpdateRequest,
     TemplatesResponse,
     UsageResetRequest,
     UsageResetResponse,
@@ -228,9 +230,39 @@ async def list_templates(current_user: UserRecord = Depends(get_current_user)):
     templates = TemplateService().list_templates()
     return TemplatesResponse(
         templates=[
-            TemplateResponse(id=template.id, name=template.name, size=template.size)
+            TemplateResponse(id=template.id, name=template.name, size=template.size, kind=template.kind)
             for template in templates
         ]
+    )
+
+
+@router.get("/api/templates/{template_id}/markdown", response_model=TemplateMarkdownResponse)
+async def get_template_markdown(
+    template_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    service = TemplateService()
+    try:
+        content = service.read_markdown_template(template_id)
+        template = next(
+            (item for item in service.list_templates() if item.id == template_id),
+            None,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Template not found") from exc
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=415, detail="Markdown template must be UTF-8 encoded") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    return TemplateMarkdownResponse(
+        id=template.id,
+        name=template.name,
+        content=content,
+        size=template.size,
     )
 
 
@@ -290,7 +322,28 @@ async def upload_template(
         logger.exception("Template upload failed")
         raise HTTPException(status_code=500, detail="Failed to save template") from exc
 
-    return TemplateResponse(id=template.id, name=template.name, size=template.size)
+    return TemplateResponse(id=template.id, name=template.name, size=template.size, kind=template.kind)
+
+
+@router.put("/api/admin/templates/{template_id}/markdown", response_model=TemplateResponse)
+async def update_template_markdown(
+    template_id: str,
+    req: TemplateMarkdownUpdateRequest,
+    current_admin: UserRecord = Depends(get_current_admin),
+):
+    try:
+        template = TemplateService().update_markdown_template(template_id, req.content)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Template not found") from exc
+    except UnicodeEncodeError as exc:
+        raise HTTPException(status_code=400, detail="Markdown template must be UTF-8 encodable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("Template update failed")
+        raise HTTPException(status_code=500, detail="Failed to update template") from exc
+
+    return TemplateResponse(id=template.id, name=template.name, size=template.size, kind=template.kind)
 
 
 @router.get("/api/admin/users", response_model=AdminUsersResponse)

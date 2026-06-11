@@ -16,6 +16,7 @@ class TemplateDefinition:
     id: str
     name: str
     size: int
+    kind: str
 
 
 class TemplateService:
@@ -37,6 +38,7 @@ class TemplateService:
                     id=path.name,
                     name=path.stem,
                     size=path.stat().st_size,
+                    kind=self._template_kind(path),
                 )
             )
         return templates
@@ -56,6 +58,7 @@ class TemplateService:
             id=destination.name,
             name=destination.stem,
             size=destination.stat().st_size,
+            kind=self._template_kind(destination),
         )
 
     def resolve_template_path(self, template_id: str) -> Path:
@@ -68,6 +71,28 @@ class TemplateService:
         if not path.is_file() or path.suffix.lower() not in ALLOWED_TEMPLATE_SUFFIXES:
             raise FileNotFoundError("Template not found")
         return path
+
+    def read_markdown_template(self, template_id: str) -> str:
+        path = self.resolve_template_path(template_id)
+        if self._template_kind(path) != "markdown":
+            raise ValueError("Only Markdown templates can be opened as text")
+        return path.read_text(encoding="utf-8")
+
+    def update_markdown_template(self, template_id: str, content: str) -> TemplateDefinition:
+        path = self.resolve_template_path(template_id)
+        if self._template_kind(path) != "markdown":
+            raise ValueError("Only Markdown templates can be edited as text")
+        path.write_text(content, encoding="utf-8")
+        return TemplateDefinition(
+            id=path.name,
+            name=path.stem,
+            size=path.stat().st_size,
+            kind=self._template_kind(path),
+        )
+
+    @staticmethod
+    def _template_kind(path: Path) -> str:
+        return "markdown" if path.suffix.lower() in {".md", ".markdown"} else "docx"
 
     @staticmethod
     def _safe_template_filename(filename: str | None) -> str:

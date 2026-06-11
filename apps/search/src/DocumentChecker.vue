@@ -106,13 +106,30 @@
             v-if="templates.length"
             v-model="selectedTemplate"
             class="text-base border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            @change="files.template = null"
+            @change="onSelectedTemplateChanged"
           >
             <option value="">Не выбран</option>
             <option v-for="template in templates" :key="template.id" :value="template.id">
               {{ template.name }}
             </option>
           </select>
+          <button
+            v-if="canPreviewSelectedTemplate"
+            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50"
+            @click="openTemplatePreview(false)"
+          >
+            Просмотр
+          </button>
+          <button
+            v-if="currentUser?.role === 'admin' && canPreviewSelectedTemplate"
+            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50"
+            @click="openTemplatePreview(true)"
+          >
+            Редактировать Markdown
+          </button>
+          <span v-if="selectedTemplate && selectedTemplateMeta && !canPreviewSelectedTemplate" class="text-base text-gray-400">
+            Предпросмотр доступен для .md и .markdown
+          </span>
         </div>
 
         <div v-if="currentUser?.role === 'admin'" class="mb-5 flex flex-wrap items-center gap-3">
@@ -599,6 +616,80 @@
 
       </div>
     </div>
+
+    <div
+      v-if="templatePreviewOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/45 px-4 py-6"
+      @click.self="closeTemplatePreview"
+    >
+      <div class="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl">
+        <div class="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4">
+          <div class="min-w-0">
+            <h2 class="truncate text-lg font-semibold text-gray-900">
+              {{ templatePreviewEditing ? 'Редактирование шаблона' : 'Просмотр шаблона' }}
+            </h2>
+            <div class="truncate text-base text-gray-500">{{ templatePreviewTemplate?.name || selectedTemplate }}</div>
+          </div>
+          <button
+            class="flex-shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base text-gray-700 hover:bg-gray-50"
+            @click="closeTemplatePreview"
+          >
+            Закрыть
+          </button>
+        </div>
+
+        <div class="min-h-0 flex-1 overflow-auto px-5 py-4">
+          <div v-if="templatePreviewLoading" class="text-base text-gray-500">Загружаем шаблон...</div>
+          <div
+            v-else-if="templatePreviewError"
+            class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-base text-red-700"
+          >
+            {{ templatePreviewError }}
+          </div>
+          <textarea
+            v-else-if="templatePreviewEditing"
+            v-model="templatePreviewContent"
+            class="h-[60vh] w-full resize-none rounded-lg border border-gray-200 bg-white px-4 py-3 font-mono text-base leading-relaxed text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            spellcheck="false"
+          ></textarea>
+          <div
+            v-else
+            class="markdown-preview max-w-none text-base leading-relaxed text-gray-800"
+            v-html="renderedTemplateMarkdown"
+          ></div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-5 py-4">
+          <div class="text-base text-gray-500">
+            {{ templatePreviewEditing ? 'Изменения сохраняются в выбранный Markdown-файл.' : 'Markdown отрендерен в браузере.' }}
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              v-if="currentUser?.role === 'admin' && !templatePreviewEditing && !templatePreviewLoading && !templatePreviewError"
+              class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
+              @click="templatePreviewEditing = true"
+            >
+              Редактировать
+            </button>
+            <button
+              v-if="templatePreviewEditing"
+              class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
+              @click="templatePreviewEditing = false"
+            >
+              Показать предпросмотр
+            </button>
+            <button
+              v-if="templatePreviewEditing"
+              :disabled="templatePreviewSaving"
+              class="rounded-lg bg-blue-600 px-4 py-2 text-base font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+              @click="saveTemplateMarkdown"
+            >
+              {{ templatePreviewSaving ? 'Сохраняем...' : 'Сохранить' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -789,6 +880,13 @@ const adminTemplateInput = ref(null)
 const adminTemplateFile = ref(null)
 const adminTemplateUploadLoading = ref(false)
 const adminTemplateUploadMessage = ref('')
+const templatePreviewOpen = ref(false)
+const templatePreviewLoading = ref(false)
+const templatePreviewSaving = ref(false)
+const templatePreviewEditing = ref(false)
+const templatePreviewError = ref('')
+const templatePreviewTemplate = ref(null)
+const templatePreviewContent = ref('')
 
 // ── File management ───────────────────────────────────────────────────────────
 function onDocumentsAdded(newFiles) {
@@ -809,6 +907,11 @@ function onTemplateFileSelected(file) {
   files.template = file
 }
 
+function onSelectedTemplateChanged() {
+  files.template = null
+  closeTemplatePreview()
+}
+
 function onAdminTemplateFileSelected(event) {
   const file = event.target.files?.[0] || null
   adminTemplateUploadMessage.value = ''
@@ -822,6 +925,9 @@ function onAdminTemplateFileSelected(event) {
 const isAuthenticated = computed(() => Boolean(authToken.value && currentUser.value))
 const hasTemplate = computed(() => Boolean(files.template || selectedTemplate.value))
 const canRun = computed(() => hasTemplate.value && files.documents.length > 0 && Boolean(model.value))
+const selectedTemplateMeta = computed(() => templates.value.find((item) => item.id === selectedTemplate.value) || null)
+const canPreviewSelectedTemplate = computed(() => isMarkdownTemplate(selectedTemplateMeta.value))
+const renderedTemplateMarkdown = computed(() => renderMarkdown(templatePreviewContent.value))
 
 const overallProgress = computed(() => {
   if (!fileResults.value.length) return 0
@@ -844,6 +950,10 @@ function modelOptionLabel(option) {
     return option.name
   }
   return `${option.name} (${option.remaining ?? 0}/${option.usage_limit})`
+}
+
+function isMarkdownTemplate(template) {
+  return template?.kind === 'markdown' || /\.(md|markdown)$/i.test(template?.id || '')
 }
 
 function getMetrics(result) {
@@ -945,6 +1055,67 @@ async function loadTemplates() {
   templates.value = data.templates || []
   if (selectedTemplate.value && !templates.value.some((item) => item.id === selectedTemplate.value)) {
     selectedTemplate.value = ''
+  }
+}
+
+async function openTemplatePreview(editing = false) {
+  const template = selectedTemplateMeta.value
+  if (!isMarkdownTemplate(template)) return
+
+  templatePreviewOpen.value = true
+  templatePreviewEditing.value = Boolean(editing && currentUser.value?.role === 'admin')
+  templatePreviewLoading.value = true
+  templatePreviewSaving.value = false
+  templatePreviewError.value = ''
+  templatePreviewTemplate.value = template
+
+  try {
+    const res = await authorizedFetch(apiUrl(`/templates/${encodeURIComponent(template.id)}/markdown`))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
+    templatePreviewTemplate.value = data
+    templatePreviewContent.value = data.content || ''
+  } catch (e) {
+    templatePreviewError.value = e.message || 'Не удалось открыть шаблон'
+    templatePreviewContent.value = ''
+  } finally {
+    templatePreviewLoading.value = false
+  }
+}
+
+function closeTemplatePreview() {
+  if (templatePreviewSaving.value) return
+  templatePreviewOpen.value = false
+  templatePreviewLoading.value = false
+  templatePreviewEditing.value = false
+  templatePreviewError.value = ''
+}
+
+async function saveTemplateMarkdown() {
+  const templateId = templatePreviewTemplate.value?.id || selectedTemplate.value
+  if (!templateId || currentUser.value?.role !== 'admin') return
+
+  templatePreviewSaving.value = true
+  templatePreviewError.value = ''
+
+  try {
+    const res = await authorizedFetch(apiUrl(`/admin/templates/${encodeURIComponent(templateId)}/markdown`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ content: templatePreviewContent.value }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
+
+    await loadTemplates()
+    selectedTemplate.value = data.id
+    templatePreviewTemplate.value = data
+    templatePreviewEditing.value = false
+    adminTemplateUploadMessage.value = `Шаблон сохранён: ${data.name}`
+  } catch (e) {
+    templatePreviewError.value = e.message || 'Не удалось сохранить шаблон'
+  } finally {
+    templatePreviewSaving.value = false
   }
 }
 
@@ -1190,5 +1361,273 @@ function parseDownloadFilename(disposition) {
   return plainMatch?.[1] || ''
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function sanitizeMarkdownUrl(value) {
+  const trimmed = String(value || '').trim()
+  if (/^(https?:\/\/|mailto:|#)/i.test(trimmed)) return escapeHtml(trimmed)
+  return ''
+}
+
+function renderInlineMarkdown(value) {
+  const placeholders = []
+  const stash = (html) => {
+    const key = `%%MDPH${placeholders.length}%%`
+    placeholders.push([key, html])
+    return key
+  }
+
+  let text = String(value ?? '')
+    .replace(/`([^`]+)`/g, (_, code) => stash(`<code>${escapeHtml(code)}</code>`))
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, href) => {
+      const safeHref = sanitizeMarkdownUrl(href)
+      if (!safeHref) return match
+      return stash(`<a href="${safeHref}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`)
+    })
+
+  text = escapeHtml(text)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/_([^_]+)_/g, '<em>$1</em>')
+
+  for (const [key, html] of placeholders) {
+    text = text.replaceAll(key, html)
+  }
+  return text
+}
+
+function renderMarkdownTable(lines) {
+  const cells = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim())
+  const headers = cells(lines[0])
+  const rows = lines.slice(2).map(cells)
+  return [
+    '<table>',
+    '<thead><tr>',
+    headers.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join(''),
+    '</tr></thead>',
+    '<tbody>',
+    rows.map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join('')}</tr>`).join(''),
+    '</tbody></table>',
+  ].join('')
+}
+
+function renderMarkdown(markdown) {
+  const lines = String(markdown ?? '').replace(/\r\n/g, '\n').split('\n')
+  const html = []
+  let paragraph = []
+  let listType = null
+  let listItems = []
+  let quoteLines = []
+  let codeLines = []
+  let inCode = false
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return
+    html.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`)
+    paragraph = []
+  }
+  const flushList = () => {
+    if (!listType) return
+    html.push(`<${listType}>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${listType}>`)
+    listType = null
+    listItems = []
+  }
+  const flushQuote = () => {
+    if (!quoteLines.length) return
+    html.push(`<blockquote>${quoteLines.map((line) => `<p>${renderInlineMarkdown(line)}</p>`).join('')}</blockquote>`)
+    quoteLines = []
+  }
+  const flushCode = () => {
+    html.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
+    codeLines = []
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i]
+    const trimmed = raw.trim()
+
+    if (trimmed.startsWith('```')) {
+      if (inCode) {
+        flushCode()
+        inCode = false
+      } else {
+        flushParagraph()
+        flushList()
+        flushQuote()
+        inCode = true
+      }
+      continue
+    }
+
+    if (inCode) {
+      codeLines.push(raw)
+      continue
+    }
+
+    const next = lines[i + 1]?.trim() || ''
+    if (trimmed.includes('|') && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(next)) {
+      flushParagraph()
+      flushList()
+      flushQuote()
+      const tableLines = [trimmed, next]
+      i += 2
+      while (i < lines.length && lines[i].trim().includes('|')) {
+        tableLines.push(lines[i].trim())
+        i += 1
+      }
+      i -= 1
+      html.push(renderMarkdownTable(tableLines))
+      continue
+    }
+
+    if (!trimmed) {
+      flushParagraph()
+      flushList()
+      flushQuote()
+      continue
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/)
+    if (heading) {
+      flushParagraph()
+      flushList()
+      flushQuote()
+      const level = heading[1].length
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`)
+      continue
+    }
+
+    if (/^---+$/.test(trimmed)) {
+      flushParagraph()
+      flushList()
+      flushQuote()
+      html.push('<hr />')
+      continue
+    }
+
+    const quote = trimmed.match(/^>\s?(.*)$/)
+    if (quote) {
+      flushParagraph()
+      flushList()
+      quoteLines.push(quote[1])
+      continue
+    }
+
+    const unordered = trimmed.match(/^[-*+]\s+(.+)$/)
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/)
+    if (unordered || ordered) {
+      flushParagraph()
+      flushQuote()
+      const currentType = unordered ? 'ul' : 'ol'
+      if (listType && listType !== currentType) flushList()
+      listType = currentType
+      listItems.push((unordered || ordered)[1])
+      continue
+    }
+
+    flushList()
+    flushQuote()
+    paragraph.push(trimmed)
+  }
+
+  if (inCode) flushCode()
+  flushParagraph()
+  flushList()
+  flushQuote()
+
+  return html.join('\n') || '<p class="text-gray-400">Шаблон пуст.</p>'
+}
+
 onMounted(loadCurrentUser)
 </script>
+
+<style scoped>
+.markdown-preview :deep(h1),
+.markdown-preview :deep(h2),
+.markdown-preview :deep(h3),
+.markdown-preview :deep(h4),
+.markdown-preview :deep(h5),
+.markdown-preview :deep(h6) {
+  margin: 1.1rem 0 0.5rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #111827;
+}
+
+.markdown-preview :deep(h1) { font-size: 1.5rem; }
+.markdown-preview :deep(h2) { font-size: 1.25rem; }
+.markdown-preview :deep(h3) { font-size: 1.125rem; }
+.markdown-preview :deep(p),
+.markdown-preview :deep(ul),
+.markdown-preview :deep(ol),
+.markdown-preview :deep(blockquote),
+.markdown-preview :deep(pre),
+.markdown-preview :deep(table) {
+  margin: 0.75rem 0;
+}
+
+.markdown-preview :deep(ul),
+.markdown-preview :deep(ol) {
+  padding-left: 1.5rem;
+}
+
+.markdown-preview :deep(ul) { list-style: disc; }
+.markdown-preview :deep(ol) { list-style: decimal; }
+.markdown-preview :deep(blockquote) {
+  border-left: 4px solid #d1d5db;
+  color: #4b5563;
+  padding-left: 1rem;
+}
+
+.markdown-preview :deep(code) {
+  border-radius: 0.375rem;
+  background: #f3f4f6;
+  padding: 0.1rem 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.markdown-preview :deep(pre) {
+  overflow: auto;
+  border-radius: 0.5rem;
+  background: #111827;
+  color: #f9fafb;
+  padding: 1rem;
+}
+
+.markdown-preview :deep(pre code) {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.markdown-preview :deep(a) {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.markdown-preview :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-preview :deep(th),
+.markdown-preview :deep(td) {
+  border: 1px solid #e5e7eb;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-preview :deep(th) {
+  background: #f9fafb;
+  font-weight: 600;
+}
+</style>
