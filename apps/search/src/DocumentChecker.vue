@@ -1,218 +1,50 @@
 <template>
-  <div v-if="authChecking" class="h-screen overflow-hidden text-gray-900 font-sans bg-[url('/1.jpg')] bg-cover bg-center bg-no-repeat">
-    <div class="h-full flex items-center justify-center bg-white/20 backdrop-blur-[2px] px-6">
-      <div class="w-full max-w-sm rounded-lg border border-gray-200 bg-white px-6 py-5 shadow-sm">
-        <div class="h-1 bg-gray-200 rounded-full overflow-hidden">
-          <div class="h-full w-2/3 bg-blue-600 rounded-full animate-pulse"></div>
-        </div>
-        <p class="mt-4 text-base text-gray-600">Проверяем сессию...</p>
-      </div>
-    </div>
-  </div>
+  <AuthLoading v-if="authChecking" />
 
-  <div v-else-if="!isAuthenticated" class="h-screen overflow-hidden text-gray-900 font-sans bg-[url('/1.jpg')] bg-cover bg-center bg-no-repeat">
-    <div class="h-full flex items-center justify-center bg-white/20 backdrop-blur-[2px] px-6">
-      <form
-        class="w-full max-w-sm rounded-lg border border-gray-200 bg-white px-6 py-6 shadow-sm"
-        @submit.prevent="login"
-      >
-        <h1 class="text-2xl font-semibold tracking-tight">Вход</h1>
-        <div class="mt-5 flex flex-col gap-4">
-          <label class="flex flex-col gap-1 text-base font-medium text-gray-700">
-            Логин
-            <input
-              v-model.trim="loginForm.username"
-              autocomplete="username"
-              class="rounded-lg border border-gray-200 px-3 py-2 text-base font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              type="text"
-              required
-            />
-          </label>
-          <label class="flex flex-col gap-1 text-base font-medium text-gray-700">
-            Пароль
-            <input
-              v-model="loginForm.password"
-              autocomplete="current-password"
-              class="rounded-lg border border-gray-200 px-3 py-2 text-base font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              type="password"
-              required
-            />
-          </label>
-        </div>
-        <div
-          v-if="loginError"
-          class="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-base text-red-700"
-        >
-          {{ loginError }}
-        </div>
-        <button
-          :disabled="loginLoading || !loginForm.username || !loginForm.password"
-          class="mt-5 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-base font-medium text-white transition-all hover:bg-blue-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-          type="submit"
-        >
-          {{ loginLoading ? 'Входим...' : 'Войти' }}
-        </button>
-      </form>
-    </div>
-  </div>
+  <LoginView
+    v-else-if="!isAuthenticated"
+    :login-form="loginForm"
+    :login-error="loginError"
+    :login-loading="loginLoading"
+    @submit="login"
+  />
 
   <div v-else class="h-screen overflow-hidden text-gray-900 font-sans bg-[url('/1.jpg')] bg-cover bg-center bg-no-repeat">
     <div class="h-full overflow-y-auto bg-white/15 backdrop-blur-[2px]" style="scrollbar-width: none; -ms-overflow-style: none;">
       <div class="max-w-6xl mx-auto px-16 py-10">
+        <AppHeader :current-user="currentUser" @logout="logout" />
 
-        <!-- Header -->
-        <div class="mb-8">
-          <h1 class="text-2xl font-semibold tracking-tight">Проверка документов</h1>
-          <p class="text-base text-gray-500 mt-1">
-            Загрузите шаблон и документы для проверки структуры, содержания и форматирования
-          </p>
-          <div class="mt-3 flex flex-wrap items-center gap-3 text-base text-gray-600">
-            <span class="rounded-lg border border-gray-200 bg-white px-3 py-1.5">{{ currentUser?.email }}</span>
-            <button
-              class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-gray-700 transition-colors hover:bg-gray-50"
-              @click="logout"
-            >
-              Выйти
-            </button>
-          </div>
-        </div>
+        <UploadSection
+          v-model:selected-template="selectedTemplate"
+          :files="files"
+          :templates="templates"
+          :selected-template-meta="selectedTemplateMeta"
+          :can-preview-selected-template="canPreviewSelectedTemplate"
+          :current-user="currentUser"
+          :template-file-accept="TEMPLATE_FILE_ACCEPT"
+          :template-file-hint="TEMPLATE_FILE_HINT"
+          @template-file-selected="onTemplateFileSelected"
+          @template-file-removed="files.template = null"
+          @documents-added="onDocumentsAdded"
+          @document-removed="removeDocument"
+          @template-selected="onSelectedTemplateChanged"
+          @preview-template="openTemplatePreview"
+        />
 
-        <!-- Upload zones -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
-          <!-- Шаблон — одиночный файл -->
-          <DropZone
-            label="Шаблон (эталон)"
-            icon="📄"
-            :file="files.template"
-            :accept="TEMPLATE_FILE_ACCEPT"
-            :file-hint="TEMPLATE_FILE_HINT"
-            @file-selected="onTemplateFileSelected"
-            @file-removed="files.template = null"
-          />
+        <CheckControls
+          v-model:model="model"
+          :models="models"
+          :can-run="canRun"
+          :loading="loading"
+          @run="runCheck"
+        />
 
-          <!-- Документы — множественная загрузка -->
-          <MultiDropZone
-            label="Документы для проверки"
-            icon="📋"
-            :files="files.documents"
-            @files-added="onDocumentsAdded"
-            @file-removed="removeDocument"
-          />
-        </div>
+        <ProgressBar
+          v-if="loading"
+          :progress="overallProgress"
+          :label="progressLabel"
+        />
 
-        <div v-if="templates.length" class="mb-5 flex flex-wrap items-center gap-3">
-          <label v-if="templates.length" class="text-base text-gray-500">Готовый шаблон:</label>
-          <select
-            v-if="templates.length"
-            v-model="selectedTemplate"
-            class="text-base border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            @change="onSelectedTemplateChanged"
-          >
-            <option value="">Не выбран</option>
-            <option v-for="template in templates" :key="template.id" :value="template.id">
-              {{ template.name }}
-            </option>
-          </select>
-          <button
-            v-if="canPreviewSelectedTemplate"
-            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50"
-            @click="openTemplatePreview(false)"
-          >
-            Просмотр
-          </button>
-          <button
-            v-if="currentUser?.role === 'admin' && canPreviewSelectedTemplate"
-            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50"
-            @click="openTemplatePreview(true)"
-          >
-            Редактировать Markdown
-          </button>
-          <span v-if="selectedTemplate && selectedTemplateMeta && !canPreviewSelectedTemplate" class="text-base text-gray-400">
-            Предпросмотр доступен для .md и .markdown
-          </span>
-        </div>
-
-        <div v-if="currentUser?.role === 'admin'" class="mb-5 flex flex-wrap items-center gap-3">
-          <input
-            class="hidden"
-            ref="adminTemplateInput"
-            :accept="TEMPLATE_FILE_ACCEPT"
-            type="file"
-            @change="onAdminTemplateFileSelected"
-          />
-          <button
-            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50"
-            @click="adminTemplateInput?.click()"
-          >
-            {{ adminTemplateFile ? adminTemplateFile.name : 'Выбрать шаблон' }}
-          </button>
-          <button
-            :disabled="!adminTemplateFile || adminTemplateUploadLoading"
-            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
-            @click="uploadAdminTemplate"
-          >
-            {{ adminTemplateUploadLoading ? 'Загружаем...' : 'Загрузить шаблон' }}
-          </button>
-          <span v-if="adminTemplateUploadMessage" class="text-base text-gray-600">{{ adminTemplateUploadMessage }}</span>
-        </div>
-
-        <!-- Controls -->
-        <div class="flex flex-wrap items-center gap-3 mb-5">
-          <div class="flex items-center gap-2">
-            <label class="text-base text-gray-500">Модель:</label>
-            <select
-              v-model="model"
-              class="text-base border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option v-for="option in models" :key="option.id" :value="option.id">
-                {{ modelOptionLabel(option) }}
-              </option>
-            </select>
-          </div>
-          <button
-            :disabled="!canRun || loading"
-            @click="runCheck"
-            class="px-5 py-2 text-base font-medium rounded-lg bg-blue-600 text-white transition-all
-                  hover:bg-blue-700 active:scale-95
-                  disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {{ loading ? 'Проверяем...' : 'Запустить проверку' }}
-          </button>
-        </div>
-
-        <div v-if="currentUser?.role === 'admin'" class="mb-5 flex flex-wrap items-center gap-3">
-          <label class="text-base text-gray-500">Пользователь:</label>
-          <select
-            v-model="adminResetUser"
-            class="text-base border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="">Все пользователи</option>
-            <option v-for="user in adminUsers" :key="user.email" :value="user.email">
-              {{ user.email }} · {{ user.check_count || 0 }} проверок
-            </option>
-          </select>
-          <button
-            :disabled="adminResetLoading"
-            class="px-4 py-2 text-base font-medium rounded-lg border border-gray-200 bg-white text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
-            @click="resetUsageLimits"
-          >
-            {{ adminResetLoading ? 'Сбрасываем...' : 'Сбросить лимиты' }}
-          </button>
-          <span v-if="adminResetMessage" class="text-base text-gray-600">{{ adminResetMessage }}</span>
-        </div>
-
-        <!-- Progress -->
-        <div v-if="loading" class="mb-5">
-          <div class="h-1 bg-gray-200 rounded-full overflow-hidden">
-            <div
-              class="h-full bg-blue-500 rounded-full transition-all duration-500"
-              :style="{ width: overallProgress + '%' }"
-            ></div>
-          </div>
-          <p class="text-lg text-gray-400 mt-1.5">{{ progressLabel }}</p>
-        </div>
-
-        <!-- Error alert -->
         <div
           v-if="globalError"
           class="mb-5 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-base text-red-700"
@@ -220,481 +52,76 @@
           {{ globalError }}
         </div>
 
-        <!-- Results per file -->
-        <template v-if="fileResults.length">
-          <hr class="border-gray-100 my-6" />
-          <h2 class="text-base font-semibold mb-3">Результаты проверки</h2>
+        <ResultsList
+          v-if="fileResults.length"
+          :file-results="fileResults"
+          @download-report="downloadReport"
+        />
 
-          <div class="flex flex-col gap-3">
-            <div
-              v-for="fr in fileResults"
-              :key="fr.fileName"
-              class="border border-gray-200 rounded-xl overflow-hidden bg-white"
-            >
-              <!-- File accordion header -->
-              <button
-                @click="fr.open = !fr.open"
-                class="w-full flex items-center justify-between px-5 py-4 text-base font-medium bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-              >
-                <span class="flex items-center gap-3">
-                  <!-- Status icon -->
-                  <span v-if="fr.loading" class="text-xl animate-spin">⏳</span>
-                  <span v-else-if="fr.error" class="text-xl">❌</span>
-                  <span v-else-if="fr.result && fr.result.errors?.length === 0" class="text-xl">✅</span>
-                  <span v-else class="text-xl">⚠️</span>
+        <HistoryList
+          v-if="historyItems.length"
+          :items="historyItems"
+          title="История моих проверок"
+          @refresh="loadHistory"
+          @download-report="downloadHistoryReport"
+          @download-source="downloadHistorySource"
+        />
 
-                  <span class="text-gray-800 break-all">{{ fr.fileName }}</span>
+        <AdminTabs
+          v-if="currentUser?.role === 'admin'"
+          v-model:checks-user="adminChecksUser"
+          v-model:reset-user="adminResetUser"
+          :admin-users="adminUsers"
+          :admin-checks="adminChecks"
+          :reset-loading="adminResetLoading"
+          :reset-message="adminResetMessage"
+          :admin-template-file="adminTemplateFile"
+          :admin-template-upload-loading="adminTemplateUploadLoading"
+          :admin-template-upload-message="adminTemplateUploadMessage"
+          :template-file-accept="TEMPLATE_FILE_ACCEPT"
+          @filter-checks="loadAdminChecks"
+          @reset-limits="resetUsageLimits"
+          @admin-template-file-selected="onAdminTemplateFileSelected"
+          @upload-template="uploadAdminTemplate"
+          @download-report="downloadHistoryReport"
+          @download-source="downloadHistorySource"
+        />
 
-                  <!-- Error count badge -->
-                  <span
-                    v-if="!fr.loading && !fr.error && fr.result"
-                    class="text-xs font-normal rounded-full px-2 py-0.5"
-                    :class="fr.result.errors?.length ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'"
-                  >
-                    {{ fr.result.errors?.length ? fr.result.errors.length + ' ошибок' : 'OK' }}
-                  </span>
-
-                  <span v-if="fr.loading" class="text-xs font-normal text-gray-400 bg-gray-200 rounded-full px-2 py-0.5">
-                    Проверяется...
-                  </span>
-                </span>
-
-                <span class="text-gray-400 text-lg flex-shrink-0 ml-2">{{ fr.open ? '▲' : '▼' }}</span>
-              </button>
-
-              <!-- File accordion body -->
-              <div v-if="fr.open" class="p-5">
-                <!-- Loading state -->
-                <div v-if="fr.loading" class="text-base text-gray-400">
-                  Идёт проверка файла...
-                </div>
-
-                <!-- Error state -->
-                <div v-else-if="fr.error" class="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-base text-red-700">
-                  {{ fr.error }}
-                </div>
-
-                <!-- Result -->
-                <template v-else-if="fr.result">
-                  <!-- Metrics -->
-                  <div class="grid grid-cols-3 gap-3 mb-5">
-                    <div
-                      v-for="m in getMetrics(fr.result)"
-                      :key="m.label"
-                      class="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3"
-                    >
-                      <div class="text-lg text-gray-400 mb-1">{{ m.label }}</div>
-                      <div class="text-2xl font-semibold text-gray-900">{{ m.value }}</div>
-                    </div>
-                  </div>
-
-                  <!-- Warnings -->
-                  <div
-                    v-if="fr.result.warnings?.length"
-                    class="mb-5 px-4 py-3 rounded-lg bg-yellow-50 border border-yellow-200 text-base text-yellow-800"
-                  >
-                    <div v-for="warning in fr.result.warnings" :key="warning">
-                      {{ warning }}
-                    </div>
-                  </div>
-
-                  <!-- No errors -->
-                  <div
-                    v-if="!fr.result.errors?.length"
-                    class="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-base text-green-700"
-                  >
-                    Ошибок не найдено — документ полностью соответствует шаблону.
-                  </div>
-
-                  <!-- Error groups -->
-                  <div v-else class="flex flex-col gap-2">
-                    <div v-for="(group, key) in fr.groupedErrors" :key="key">
-                      <div v-if="group.errors.length" class="border border-gray-100 rounded-xl overflow-hidden">
-                        <button
-                          @click="group.open = !group.open"
-                          class="w-full flex items-center justify-between px-4 py-3 text-base font-medium
-                                bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-                        >
-                          <span class="flex items-center gap-2">
-                            {{ group.label }}
-                            <span class="text-lg font-normal bg-gray-200 text-gray-600 rounded-full px-2 py-0.5">
-                              {{ group.errors.length }}
-                            </span>
-                          </span>
-                          <span class="text-gray-400 text-lg">{{ group.open ? '▲' : '▼' }}</span>
-                        </button>
-
-                        <div v-if="group.open" class="p-3 flex flex-col gap-2 bg-white">
-                          <template v-for="sev in ['critical', 'high', 'medium', 'low']" :key="sev">
-                            <template v-if="bySev(group.errors, sev).length">
-                              <div class="text-lg font-semibold uppercase tracking-widest text-gray-400 mt-1">
-                                {{ sevEmoji(sev) }} {{ sev }}
-                              </div>
-                              <div
-                                v-for="err in bySev(group.errors, sev)"
-                                :key="err.description"
-                                class="rounded-lg border border-gray-100 border-l-4 px-3 py-2.5 bg-gray-50"
-                                :class="sevBorderClass(sev)"
-                              >
-                                <div class="text-base font-medium text-gray-800">{{ err.section || 'Общий' }}</div>
-                                <div class="text-lg text-gray-500 mt-0.5 leading-relaxed">{{ err.description }}</div>
-                              </div>
-                            </template>
-                          </template>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Download -->
-                  <button
-                    @click="downloadReport(fr)"
-                    class="mt-4 text-base px-4 py-2 rounded-lg border border-gray-200 bg-white
-                          hover:bg-gray-50 transition-colors text-gray-700"
-                  >
-                    Скачать отчёт (PDF)
-                  </button>
-                </template>
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <template v-if="historyItems.length">
-          <hr class="border-gray-100 my-6" />
-          <div class="flex items-center justify-between gap-3 mb-3">
-            <h2 class="text-base font-semibold">История моих проверок</h2>
-            <button
-              class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-              @click="loadHistory"
-            >
-              Обновить
-            </button>
-          </div>
-          <div class="border border-gray-200 rounded-xl overflow-hidden bg-white">
-            <div
-              v-for="item in historyItems"
-              :key="item.id"
-              class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0"
-            >
-              <div class="min-w-0">
-                <div class="text-base font-medium text-gray-800 break-all">{{ item.document_name }}</div>
-                <div class="text-lg text-gray-400">
-                  {{ formatDate(item.created_at) }} · {{ item.model_id }} · {{ item.compliance_score }}% · ошибок: {{ item.errors_count }}
-                </div>
-              </div>
-              <div class="flex flex-wrap gap-2">
-                <button
-                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-                  @click="item.open = !item.open"
-                >
-                  {{ item.open ? 'Скрыть' : 'Открыть' }}
-                </button>
-                <button
-                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-                  @click="downloadHistoryReport(item)"
-                >
-                  PDF
-                </button>
-                <button
-                  :disabled="!item.source_available"
-                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40"
-                  @click="downloadHistorySource(item)"
-                >
-                  DOCX
-                </button>
-              </div>
-              <div v-if="item.open" class="w-full pt-3">
-                <div class="grid grid-cols-3 gap-3 mb-5">
-                  <div
-                    v-for="m in getMetrics(item.result || {})"
-                    :key="m.label"
-                    class="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3"
-                  >
-                    <div class="text-lg text-gray-400 mb-1">{{ m.label }}</div>
-                    <div class="text-2xl font-semibold text-gray-900">{{ m.value }}</div>
-                  </div>
-                </div>
-                <div
-                  v-if="item.result?.warnings?.length"
-                  class="mb-5 px-4 py-3 rounded-lg bg-yellow-50 border border-yellow-200 text-base text-yellow-800"
-                >
-                  <div v-for="warning in item.result.warnings" :key="warning">
-                    {{ warning }}
-                  </div>
-                </div>
-                <div
-                  v-if="!item.result?.errors?.length"
-                  class="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-base text-green-700"
-                >
-                  Ошибок не найдено — документ полностью соответствует шаблону.
-                </div>
-                <div v-else class="flex flex-col gap-2">
-                  <div v-for="(group, key) in item.groupedErrors" :key="key">
-                    <div v-if="group.errors.length" class="border border-gray-100 rounded-xl overflow-hidden">
-                      <button
-                        @click="group.open = !group.open"
-                        class="w-full flex items-center justify-between px-4 py-3 text-base font-medium bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-                      >
-                        <span class="flex items-center gap-2">
-                          {{ group.label }}
-                          <span class="text-lg font-normal bg-gray-200 text-gray-600 rounded-full px-2 py-0.5">
-                            {{ group.errors.length }}
-                          </span>
-                        </span>
-                        <span class="text-gray-400 text-lg">{{ group.open ? '▲' : '▼' }}</span>
-                      </button>
-                      <div v-if="group.open" class="p-3 flex flex-col gap-2 bg-white">
-                        <template v-for="sev in ['critical', 'high', 'medium', 'low']" :key="sev">
-                          <template v-if="bySev(group.errors, sev).length">
-                            <div class="text-lg font-semibold uppercase tracking-widest text-gray-400 mt-1">
-                              {{ sevEmoji(sev) }} {{ sev }}
-                            </div>
-                            <div
-                              v-for="err in bySev(group.errors, sev)"
-                              :key="err.description"
-                              class="rounded-lg border border-gray-100 border-l-4 px-3 py-2.5 bg-gray-50"
-                              :class="sevBorderClass(sev)"
-                            >
-                              <div class="text-base font-medium text-gray-800">{{ err.section || 'Общий' }}</div>
-                              <div class="text-lg text-gray-500 mt-0.5 leading-relaxed">{{ err.description }}</div>
-                            </div>
-                          </template>
-                        </template>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <template v-if="currentUser?.role === 'admin' && adminUsers.length">
-          <hr class="border-gray-100 my-6" />
-          <h2 class="text-base font-semibold mb-3">Пользователи</h2>
-          <div class="border border-gray-200 rounded-xl overflow-hidden bg-white">
-            <div
-              v-for="user in adminUsers"
-              :key="user.email"
-              class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0"
-            >
-              <div class="min-w-0">
-                <div class="text-base font-medium text-gray-800 break-all">{{ user.email }}</div>
-                <div class="text-lg text-gray-400">
-                  {{ user.role }} · вход: {{ formatDate(user.last_login_at) }}
-                </div>
-              </div>
-              <div class="text-base text-gray-600">
-                Проверок: {{ user.check_count || 0 }}
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <template v-if="currentUser?.role === 'admin'">
-          <hr class="border-gray-100 my-6" />
-          <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
-            <h2 class="text-base font-semibold">Проверки пользователей</h2>
-            <select
-              v-model="adminChecksUser"
-              class="text-base border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              @change="loadAdminChecks"
-            >
-              <option value="">Все пользователи</option>
-              <option v-for="user in adminUsers" :key="user.email" :value="user.email">
-                {{ user.email }}
-              </option>
-            </select>
-          </div>
-          <div class="border border-gray-200 rounded-xl overflow-hidden bg-white">
-            <div
-              v-for="item in adminChecks"
-              :key="item.id"
-              class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0"
-            >
-              <div class="min-w-0">
-                <div class="text-base font-medium text-gray-800 break-all">{{ item.document_name }}</div>
-              <div class="text-lg text-gray-400">
-                  {{ item.user_email }} · {{ formatDate(item.created_at) }} · {{ item.compliance_score }}% · ошибок: {{ item.errors_count }}
-                </div>
-              </div>
-              <div class="flex flex-wrap gap-2">
-                <button
-                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-                  @click="item.open = !item.open"
-                >
-                  {{ item.open ? 'Скрыть' : 'Открыть' }}
-                </button>
-                <button
-                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-                  @click="downloadHistoryReport(item)"
-                >
-                  PDF
-                </button>
-                <button
-                  :disabled="!item.source_available"
-                  class="px-3 py-1.5 text-base rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40"
-                  @click="downloadHistorySource(item)"
-                >
-                  DOCX
-                </button>
-              </div>
-              <div v-if="item.open" class="w-full pt-3">
-                <div class="grid grid-cols-3 gap-3 mb-5">
-                  <div
-                    v-for="m in getMetrics(item.result || {})"
-                    :key="m.label"
-                    class="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3"
-                  >
-                    <div class="text-lg text-gray-400 mb-1">{{ m.label }}</div>
-                    <div class="text-2xl font-semibold text-gray-900">{{ m.value }}</div>
-                  </div>
-                </div>
-                <div
-                  v-if="item.result?.warnings?.length"
-                  class="mb-5 px-4 py-3 rounded-lg bg-yellow-50 border border-yellow-200 text-base text-yellow-800"
-                >
-                  <div v-for="warning in item.result.warnings" :key="warning">
-                    {{ warning }}
-                  </div>
-                </div>
-                <div
-                  v-if="!item.result?.errors?.length"
-                  class="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-base text-green-700"
-                >
-                  Ошибок не найдено — документ полностью соответствует шаблону.
-                </div>
-                <div v-else class="flex flex-col gap-2">
-                  <div v-for="(group, key) in item.groupedErrors" :key="key">
-                    <div v-if="group.errors.length" class="border border-gray-100 rounded-xl overflow-hidden">
-                      <button
-                        @click="group.open = !group.open"
-                        class="w-full flex items-center justify-between px-4 py-3 text-base font-medium bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-                      >
-                        <span class="flex items-center gap-2">
-                          {{ group.label }}
-                          <span class="text-lg font-normal bg-gray-200 text-gray-600 rounded-full px-2 py-0.5">
-                            {{ group.errors.length }}
-                          </span>
-                        </span>
-                        <span class="text-gray-400 text-lg">{{ group.open ? '▲' : '▼' }}</span>
-                      </button>
-                      <div v-if="group.open" class="p-3 flex flex-col gap-2 bg-white">
-                        <template v-for="sev in ['critical', 'high', 'medium', 'low']" :key="sev">
-                          <template v-if="bySev(group.errors, sev).length">
-                            <div class="text-lg font-semibold uppercase tracking-widest text-gray-400 mt-1">
-                              {{ sevEmoji(sev) }} {{ sev }}
-                            </div>
-                            <div
-                              v-for="err in bySev(group.errors, sev)"
-                              :key="err.description"
-                              class="rounded-lg border border-gray-100 border-l-4 px-3 py-2.5 bg-gray-50"
-                              :class="sevBorderClass(sev)"
-                            >
-                              <div class="text-base font-medium text-gray-800">{{ err.section || 'Общий' }}</div>
-                              <div class="text-lg text-gray-500 mt-0.5 leading-relaxed">{{ err.description }}</div>
-                            </div>
-                          </template>
-                        </template>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div v-if="!adminChecks.length" class="px-4 py-3 text-base text-gray-400">
-              Проверок пока нет.
-            </div>
-          </div>
-        </template>
-
-        <!-- Hint -->
         <p v-if="!fileResults.length && !loading" class="text-base text-gray-400 mt-4">
           Загрузите шаблон и один или несколько документов для запуска проверки.
         </p>
-
       </div>
     </div>
 
-    <div
-      v-if="templatePreviewOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/45 px-4 py-6"
-      @click.self="closeTemplatePreview"
-    >
-      <div class="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl">
-        <div class="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4">
-          <div class="min-w-0">
-            <h2 class="truncate text-lg font-semibold text-gray-900">
-              {{ templatePreviewEditing ? 'Редактирование шаблона' : 'Просмотр шаблона' }}
-            </h2>
-            <div class="truncate text-base text-gray-500">{{ templatePreviewTemplate?.name || selectedTemplate }}</div>
-          </div>
-          <button
-            class="flex-shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base text-gray-700 hover:bg-gray-50"
-            @click="closeTemplatePreview"
-          >
-            Закрыть
-          </button>
-        </div>
-
-        <div class="min-h-0 flex-1 overflow-auto px-5 py-4">
-          <div v-if="templatePreviewLoading" class="text-base text-gray-500">Загружаем шаблон...</div>
-          <div
-            v-else-if="templatePreviewError"
-            class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-base text-red-700"
-          >
-            {{ templatePreviewError }}
-          </div>
-          <textarea
-            v-else-if="templatePreviewEditing"
-            v-model="templatePreviewContent"
-            class="h-[60vh] w-full resize-none rounded-lg border border-gray-200 bg-white px-4 py-3 font-mono text-base leading-relaxed text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-            spellcheck="false"
-          ></textarea>
-          <div
-            v-else
-            class="markdown-preview max-w-none text-base leading-relaxed text-gray-800"
-            v-html="renderedTemplateMarkdown"
-          ></div>
-        </div>
-
-        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-5 py-4">
-          <div class="text-base text-gray-500">
-            {{ templatePreviewEditing ? 'Изменения сохраняются в выбранный Markdown-файл.' : 'Markdown отрендерен в браузере.' }}
-          </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <button
-              v-if="currentUser?.role === 'admin' && !templatePreviewEditing && !templatePreviewLoading && !templatePreviewError"
-              class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
-              @click="templatePreviewEditing = true"
-            >
-              Редактировать
-            </button>
-            <button
-              v-if="templatePreviewEditing"
-              class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
-              @click="templatePreviewEditing = false"
-            >
-              Показать предпросмотр
-            </button>
-            <button
-              v-if="templatePreviewEditing"
-              :disabled="templatePreviewSaving"
-              class="rounded-lg bg-blue-600 px-4 py-2 text-base font-medium text-white hover:bg-blue-700 disabled:opacity-40"
-              @click="saveTemplateMarkdown"
-            >
-              {{ templatePreviewSaving ? 'Сохраняем...' : 'Сохранить' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <TemplatePreviewModal
+      v-model:content="templatePreviewContent"
+      v-model:editing="templatePreviewEditing"
+      :open="templatePreviewOpen"
+      :loading="templatePreviewLoading"
+      :saving="templatePreviewSaving"
+      :error="templatePreviewError"
+      :template="templatePreviewTemplate"
+      :selected-template="selectedTemplate"
+      :rendered-html="renderedTemplateMarkdown"
+      :can-edit="currentUser?.role === 'admin'"
+      @close="closeTemplatePreview"
+      @save="saveTemplateMarkdown"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, defineComponent, h, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import AdminTabs from './components/AdminTabs.vue'
+import AppHeader from './components/AppHeader.vue'
+import AuthLoading from './components/AuthLoading.vue'
+import CheckControls from './components/CheckControls.vue'
+import HistoryList from './components/HistoryList.vue'
+import LoginView from './components/LoginView.vue'
+import ProgressBar from './components/ProgressBar.vue'
+import ResultsList from './components/ResultsList.vue'
+import TemplatePreviewModal from './components/TemplatePreviewModal.vue'
+import UploadSection from './components/UploadSection.vue'
 
 const TEMPLATE_FILE_ACCEPT = '.docx,.md,.markdown'
 const TEMPLATE_FILE_HINT = '.docx, .md, .markdown'
@@ -702,153 +129,6 @@ const TEMPLATE_FILE_HINT = '.docx, .md, .markdown'
 function isTemplateFileName(name) {
   return /\.(docx|md|markdown)$/i.test(name || '')
 }
-
-// ── DropZone (single file, inline sub-component) ──────────────────────────────
-const DropZone = defineComponent({
-  name: 'DropZone',
-  props: { label: String, icon: String, file: Object, accept: String, fileHint: String },
-  emits: ['file-selected', 'file-removed'],
-  setup(props, { emit }) {
-    const dragOver = ref(false)
-    const inputRef = ref(null)
-
-    const onDrop = (e) => {
-      dragOver.value = false
-      const f = e.dataTransfer.files[0]
-      if (isTemplateFileName(f?.name)) emit('file-selected', f)
-    }
-    const onFile = (e) => {
-      const f = e.target.files[0]
-      if (isTemplateFileName(f?.name)) emit('file-selected', f)
-    }
-    const formatSize = (bytes) =>
-      bytes < 1024 * 1024
-        ? (bytes / 1024).toFixed(1) + ' КБ'
-        : (bytes / 1024 / 1024).toFixed(1) + ' МБ'
-
-    return () => {
-      const base =
-        'flex items-center justify-center rounded-xl border-2 border-dashed min-h-32 p-6 text-center cursor-pointer transition-all duration-150 '
-      const state = dragOver.value
-        ? 'border-blue-400 bg-blue-50'
-        : props.file
-        ? 'border-green-300 bg-green-50'
-        : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-
-      return h('div', {
-        class: base + state,
-        onDragover: (e) => { e.preventDefault(); dragOver.value = true },
-        onDragleave: () => { dragOver.value = false },
-        onDrop,
-        onClick: () => inputRef.value?.click(),
-      }, [
-        h('input', { ref: inputRef, type: 'file', accept: props.accept || '.docx', class: 'hidden', onChange: onFile }),
-        props.file
-          ? h('div', { class: 'flex flex-col items-center gap-1' }, [
-              h('div', { class: 'text-2xl' }, '✅'),
-              h('div', { class: 'text-base font-medium text-gray-800 break-all max-w-xs' }, props.file.name),
-              h('div', { class: 'text-lg text-gray-400' }, formatSize(props.file.size)),
-              h('button', {
-                class: 'mt-2 text-lg px-3 py-1 rounded-md bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 transition-colors',
-                onClick: (e) => { e.stopPropagation(); emit('file-removed') },
-              }, 'Удалить'),
-            ])
-          : h('div', { class: 'flex flex-col items-center gap-1' }, [
-              h('div', { class: 'text-2xl' }, props.icon),
-              h('div', { class: 'text-base font-medium text-gray-700 mt-1' }, props.label),
-              h('div', { class: 'text-lg text-gray-400 mt-0.5' }, `${props.fileHint || '.docx'} - перетащите или нажмите`),
-            ]),
-      ])
-    }
-  },
-})
-
-// ── MultiDropZone (multiple files, inline sub-component) ──────────────────────
-const MultiDropZone = defineComponent({
-  name: 'MultiDropZone',
-  props: { label: String, icon: String, files: Array },
-  emits: ['files-added', 'file-removed'],
-  setup(props, { emit }) {
-    const dragOver = ref(false)
-    const inputRef = ref(null)
-
-    const onDrop = (e) => {
-      dragOver.value = false
-      const newFiles = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.docx'))
-      if (newFiles.length) emit('files-added', newFiles)
-    }
-    const onFile = (e) => {
-      const newFiles = Array.from(e.target.files)
-      if (newFiles.length) emit('files-added', newFiles)
-      e.target.value = ''
-    }
-    const formatSize = (bytes) =>
-      bytes < 1024 * 1024
-        ? (bytes / 1024).toFixed(1) + ' КБ'
-        : (bytes / 1024 / 1024).toFixed(1) + ' МБ'
-
-    return () => {
-      const hasFiles = props.files && props.files.length > 0
-      const base = 'rounded-xl border-2 border-dashed transition-all duration-150 '
-      const state = dragOver.value
-        ? 'border-blue-400 bg-blue-50'
-        : hasFiles
-        ? 'border-green-300 bg-green-50'
-        : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-
-      const children = []
-
-      // Drop area (always visible)
-      children.push(
-        h('div', {
-          class: 'flex flex-col items-center justify-center min-h-24 p-4 text-center cursor-pointer',
-          onClick: () => inputRef.value?.click(),
-          onDragover: (e) => { e.preventDefault(); dragOver.value = true },
-          onDragleave: () => { dragOver.value = false },
-          onDrop,
-        }, [
-          h('input', { ref: inputRef, type: 'file', accept: '.docx', multiple: true, class: 'hidden', onChange: onFile }),
-          h('div', { class: 'text-2xl' }, hasFiles ? '➕' : props.icon),
-          h('div', { class: 'text-base font-medium text-gray-700 mt-1' }, hasFiles ? 'Добавить ещё файлы' : props.label),
-          h('div', { class: 'text-lg text-gray-400 mt-0.5' }, '.docx — перетащите или нажмите'),
-        ])
-      )
-
-      // File list
-      if (hasFiles) {
-        children.push(
-          h('div', { class: 'border-t border-gray-200 px-4 pb-3 flex flex-col gap-2' },
-            props.files.map((f, i) =>
-              h('div', {
-                key: f.name + i,
-                class: 'flex items-center justify-between gap-2 pt-2',
-              }, [
-                h('div', { class: 'flex items-center gap-2 min-w-0' }, [
-                  h('span', { class: 'text-base' }, '📋'),
-                  h('div', { class: 'min-w-0' }, [
-                    h('div', { class: 'text-base text-gray-800 truncate' }, f.name),
-                    h('div', { class: 'text-lg text-gray-400' }, formatSize(f.size)),
-                  ]),
-                ]),
-                h('button', {
-                  class: 'flex-shrink-0 text-lg px-2.5 py-1 rounded-md bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 transition-colors',
-                  onClick: (e) => { e.stopPropagation(); emit('file-removed', i) },
-                }, '✕'),
-              ])
-            )
-          )
-        )
-      }
-
-      return h('div', {
-        class: base + state,
-        onDragover: (e) => { e.preventDefault(); dragOver.value = true },
-        onDragleave: () => { dragOver.value = false },
-        onDrop,
-      }, children)
-    }
-  },
-})
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const API_BASE_URL  = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '')
@@ -876,7 +156,6 @@ const adminChecksUser = ref('')
 const adminResetUser = ref('')
 const adminResetLoading = ref(false)
 const adminResetMessage = ref('')
-const adminTemplateInput = ref(null)
 const adminTemplateFile = ref(null)
 const adminTemplateUploadLoading = ref(false)
 const adminTemplateUploadMessage = ref('')
@@ -912,14 +191,14 @@ function onSelectedTemplateChanged() {
   closeTemplatePreview()
 }
 
-function onAdminTemplateFileSelected(event) {
-  const file = event.target.files?.[0] || null
+function onAdminTemplateFileSelected(file) {
   adminTemplateUploadMessage.value = ''
   adminTemplateFile.value = isTemplateFileName(file?.name) ? file : null
   if (file && !adminTemplateFile.value) {
     adminTemplateUploadMessage.value = 'Можно загрузить только .docx, .md или .markdown'
   }
 }
+
 
 // ── Computed ──────────────────────────────────────────────────────────────────
 const isAuthenticated = computed(() => Boolean(authToken.value && currentUser.value))
@@ -936,38 +215,8 @@ const overallProgress = computed(() => {
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const sevEmoji = (s) => ({ critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' }[s] ?? '⚪')
-const bySev    = (errs, sev) => errs.filter(e => e.severity === sev)
-const sevBorderClass = (sev) => ({
-  critical: 'border-l-red-500',
-  high:     'border-l-orange-400',
-  medium:   'border-l-yellow-400',
-  low:      'border-l-green-400',
-}[sev] ?? 'border-l-gray-300')
-
-function modelOptionLabel(option) {
-  if (option.usage_limit === null || option.usage_limit === undefined) {
-    return option.name
-  }
-  return `${option.name} (${option.remaining ?? 0}/${option.usage_limit})`
-}
-
 function isMarkdownTemplate(template) {
   return template?.kind === 'markdown' || /\.(md|markdown)$/i.test(template?.id || '')
-}
-
-function getMetrics(result) {
-  const errs = result.errors ?? []
-  return [
-    { label: 'Ошибок всего',   value: errs.length },
-    { label: 'Структурных',    value: errs.filter(e => e.error_type === 'structural').length },
-    { label: 'Форматирования', value: errs.filter(e => e.error_type === 'formatting').length },
-  ]
-}
-
-function formatDate(value) {
-  if (!value) return ''
-  return new Date(value).toLocaleString()
 }
 
 function buildGroupedErrors(errors) {
@@ -1137,13 +386,19 @@ async function loadAdminUsers() {
   adminUsers.value = data.users || []
 }
 
-async function loadAdminChecks() {
-  const suffix = adminChecksUser.value ? `?user_email=${encodeURIComponent(adminChecksUser.value)}` : ''
+async function loadAdminChecks(selectedUser = adminChecksUser.value) {
+  const userEmail = selectedUser || ''
+  if (userEmail !== adminChecksUser.value) {
+    adminChecksUser.value = userEmail
+  }
+
+  const suffix = userEmail ? `?user_email=${encodeURIComponent(userEmail)}` : ''
   const res = await authorizedFetch(apiUrl(`/admin/checks${suffix}`))
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
   adminChecks.value = (data.checks || []).map(normalizeHistoryItem)
 }
+
 
 async function login() {
   loginLoading.value = true
@@ -1181,13 +436,14 @@ async function logout() {
   }
 }
 
-async function resetUsageLimits() {
+async function resetUsageLimits(userEmail = adminResetUser.value) {
   adminResetLoading.value = true
   adminResetMessage.value = ''
+  adminResetUser.value = userEmail || ''
 
   try {
     const payload = {
-      user_email: adminResetUser.value || null,
+      user_email: userEmail || null,
       model: null,
     }
     const res = await authorizedFetch(apiUrl('/admin/usage/reset'), {
@@ -1222,7 +478,6 @@ async function uploadAdminTemplate() {
 
     adminTemplateUploadMessage.value = `Шаблон загружен: ${data.name}`
     adminTemplateFile.value = null
-    if (adminTemplateInput.value) adminTemplateInput.value.value = ''
     await loadTemplates()
     selectedTemplate.value = data.id
     files.template = null
@@ -1548,86 +803,3 @@ function renderMarkdown(markdown) {
 
 onMounted(loadCurrentUser)
 </script>
-
-<style scoped>
-.markdown-preview :deep(h1),
-.markdown-preview :deep(h2),
-.markdown-preview :deep(h3),
-.markdown-preview :deep(h4),
-.markdown-preview :deep(h5),
-.markdown-preview :deep(h6) {
-  margin: 1.1rem 0 0.5rem;
-  font-weight: 700;
-  line-height: 1.25;
-  color: #111827;
-}
-
-.markdown-preview :deep(h1) { font-size: 1.5rem; }
-.markdown-preview :deep(h2) { font-size: 1.25rem; }
-.markdown-preview :deep(h3) { font-size: 1.125rem; }
-.markdown-preview :deep(p),
-.markdown-preview :deep(ul),
-.markdown-preview :deep(ol),
-.markdown-preview :deep(blockquote),
-.markdown-preview :deep(pre),
-.markdown-preview :deep(table) {
-  margin: 0.75rem 0;
-}
-
-.markdown-preview :deep(ul),
-.markdown-preview :deep(ol) {
-  padding-left: 1.5rem;
-}
-
-.markdown-preview :deep(ul) { list-style: disc; }
-.markdown-preview :deep(ol) { list-style: decimal; }
-.markdown-preview :deep(blockquote) {
-  border-left: 4px solid #d1d5db;
-  color: #4b5563;
-  padding-left: 1rem;
-}
-
-.markdown-preview :deep(code) {
-  border-radius: 0.375rem;
-  background: #f3f4f6;
-  padding: 0.1rem 0.35rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-}
-
-.markdown-preview :deep(pre) {
-  overflow: auto;
-  border-radius: 0.5rem;
-  background: #111827;
-  color: #f9fafb;
-  padding: 1rem;
-}
-
-.markdown-preview :deep(pre code) {
-  background: transparent;
-  color: inherit;
-  padding: 0;
-}
-
-.markdown-preview :deep(a) {
-  color: #2563eb;
-  text-decoration: underline;
-}
-
-.markdown-preview :deep(table) {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.markdown-preview :deep(th),
-.markdown-preview :deep(td) {
-  border: 1px solid #e5e7eb;
-  padding: 0.5rem 0.75rem;
-  text-align: left;
-  vertical-align: top;
-}
-
-.markdown-preview :deep(th) {
-  background: #f9fafb;
-  font-weight: 600;
-}
-</style>
