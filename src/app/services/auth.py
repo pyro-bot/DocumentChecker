@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -30,7 +31,7 @@ class InvalidCredentialsError(Exception):
 
 def _configured_admin_logins() -> set[str]:
     raw = os.getenv("ADMIN_LOGINS", "")
-    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+    return {item.strip().lower() for item in re.split(r"[,;\s]+", raw) if item.strip()}
 
 
 def is_admin_login(login: str) -> bool:

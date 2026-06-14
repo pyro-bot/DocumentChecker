@@ -1,11 +1,25 @@
 <script setup>
-defineProps({
-  loginForm: { type: Object, required: true },
-  loginError: { type: String, default: '' },
-  loginLoading: { type: Boolean, default: false },
+import { computed } from 'vue'
+import { useStore } from 'vuex'
+
+const store = useStore()
+const loginForm = computed(() => store.state.loginForm)
+const loginError = computed(() => store.state.loginError)
+const loginLoading = computed(() => store.state.loginLoading)
+
+const username = computed({
+  get: () => store.state.loginForm.username,
+  set: (value) => store.commit('setLoginUsername', value),
 })
 
-defineEmits(['submit'])
+const password = computed({
+  get: () => store.state.loginForm.password,
+  set: (value) => store.commit('setLoginPassword', value),
+})
+
+function submit() {
+  store.dispatch('login')
+}
 </script>
 
 <template>
@@ -13,14 +27,14 @@ defineEmits(['submit'])
     <div class="h-full flex items-center justify-center bg-white/20 backdrop-blur-[2px] px-6">
       <form
         class="w-full max-w-sm rounded-lg border border-gray-200 bg-white px-6 py-6 shadow-sm"
-        @submit.prevent="$emit('submit')"
+        @submit.prevent="submit"
       >
         <h1 class="text-2xl font-semibold tracking-tight">Вход</h1>
         <div class="mt-5 flex flex-col gap-4">
           <label class="flex flex-col gap-1 text-base font-medium text-gray-700">
             Логин
             <input
-              v-model.trim="loginForm.username"
+              v-model.trim="username"
               autocomplete="username"
               class="rounded-lg border border-gray-200 px-3 py-2 text-base font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               type="text"
@@ -30,7 +44,7 @@ defineEmits(['submit'])
           <label class="flex flex-col gap-1 text-base font-medium text-gray-700">
             Пароль
             <input
-              v-model="loginForm.password"
+              v-model="password"
               autocomplete="current-password"
               class="rounded-lg border border-gray-200 px-3 py-2 text-base font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               type="password"

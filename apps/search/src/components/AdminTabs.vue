@@ -1,36 +1,33 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useStore } from 'vuex'
 import { formatDate } from '../utils/checkPresentation.js'
+import { TEMPLATE_FILE_ACCEPT } from '../utils/templates'
 import CheckResultDetails from './CheckResultDetails.vue'
 
-const props = defineProps({
-  adminUsers: { type: Array, default: () => [] },
-  adminChecks: { type: Array, default: () => [] },
-  checksUser: { type: String, default: '' },
-  resetUser: { type: String, default: '' },
-  resetLoading: { type: Boolean, default: false },
-  resetMessage: { type: String, default: '' },
-  adminTemplateFile: { type: Object, default: null },
-  adminTemplateUploadLoading: { type: Boolean, default: false },
-  adminTemplateUploadMessage: { type: String, default: '' },
-  templateFileAccept: { type: String, default: '.docx,.md,.markdown' },
-})
-
-const emit = defineEmits([
-  'update:checksUser',
-  'update:resetUser',
-  'filter-checks',
-  'reset-limits',
-  'admin-template-file-selected',
-  'upload-template',
-  'download-report',
-  'download-source',
-])
-
+const store = useStore()
 const activeTab = ref('checks')
 const adminTemplateInput = ref(null)
 const userSearch = ref('')
-const checksUserQuery = ref(props.checksUser)
+const checksUserQuery = ref(store.state.adminChecksUser)
+
+const adminUsers = computed(() => store.state.adminUsers)
+const adminChecks = computed(() => store.state.adminChecks)
+const checksUser = computed(() => store.state.adminChecksUser)
+const resetUser = computed(() => store.state.adminResetUser)
+const resetLoading = computed(() => store.state.adminResetLoading)
+const resetMessage = computed(() => store.state.adminResetMessage)
+const models = computed(() => store.state.models)
+const quotaUser = computed(() => store.state.adminQuotaUser)
+const quotaModel = computed(() => store.state.adminQuotaModel)
+const quotaAvailable = computed(() => store.state.adminQuotaAvailable)
+const quotaLoading = computed(() => store.state.adminQuotaLoading)
+const quotaMessage = computed(() => store.state.adminQuotaMessage)
+const adminTemplateFile = computed(() => store.state.adminTemplateFile)
+const adminTemplateUploadLoading = computed(() => store.state.adminTemplateUploadLoading)
+const adminTemplateUploadMessage = computed(() => store.state.adminTemplateUploadMessage)
+const usageResetIntervalHours = computed(() => store.state.usageResetIntervalHours)
+const templateFileAccept = TEMPLATE_FILE_ACCEPT
 
 const tabs = [
   { id: 'checks', label: 'Работы' },
@@ -38,39 +35,41 @@ const tabs = [
   { id: 'tools', label: 'Шаблоны и лимиты' },
 ]
 
-watch(
-  () => props.adminTemplateFile,
-  (file) => {
-    if (!file && adminTemplateInput.value) adminTemplateInput.value.value = ''
-  },
-)
+watch(adminTemplateFile, (file) => {
+  if (!file && adminTemplateInput.value) adminTemplateInput.value.value = ''
+})
 
-watch(
-  () => props.checksUser,
-  (email) => {
-    checksUserQuery.value = email
-  },
-)
+watch(checksUser, (email) => {
+  checksUserQuery.value = email
+})
 
 const filteredAdminUsers = computed(() => {
   const query = userSearch.value.trim().toLowerCase()
-  if (!query) return props.adminUsers
+  if (!query) return adminUsers.value
 
-  return props.adminUsers.filter((user) =>
+  return adminUsers.value.filter((user) =>
     [user.email, user.role]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query)),
   )
 })
 
+const usageResetIntervalLabel = computed(() => {
+  const interval = Number(usageResetIntervalHours.value)
+  if (!Number.isFinite(interval) || interval <= 0) {
+    return 'Автосброс лимитов отключен'
+  }
+  return `Автосброс лимитов: каждые ${interval} ч.`
+})
+
 function resolveUserEmail(value) {
   const query = value.trim()
   if (!query) return ''
 
-  const exactMatch = props.adminUsers.find((user) => user.email === query)
+  const exactMatch = adminUsers.value.find((user) => user.email === query)
   if (exactMatch) return exactMatch.email
 
-  const partialMatches = props.adminUsers.filter((user) =>
+  const partialMatches = adminUsers.value.filter((user) =>
     user.email.toLowerCase().includes(query.toLowerCase()),
   )
   return partialMatches.length === 1 ? partialMatches[0].email : query
@@ -79,23 +78,28 @@ function resolveUserEmail(value) {
 function onChecksUserChanged() {
   const email = resolveUserEmail(checksUserQuery.value)
   checksUserQuery.value = email
-  emit('update:checksUser', email)
-  emit('filter-checks', email)
+  store.dispatch('loadAdminChecks', email)
 }
 
 function clearChecksUser() {
   checksUserQuery.value = ''
-  emit('update:checksUser', '')
-  emit('filter-checks', '')
+  store.dispatch('loadAdminChecks', '')
 }
 
 function onAdminTemplateSelected(event) {
-  emit('admin-template-file-selected', event.target.files?.[0] || null)
+  store.commit('setAdminTemplateFile', event.target.files?.[0] || null)
 }
 
 function resetUserLimits(email) {
-  emit('update:resetUser', email)
-  emit('reset-limits', email)
+  store.commit('setAdminResetUser', email)
+  store.dispatch('resetUsageLimits', email)
+}
+
+function modelOptionLabel(option) {
+  if (option.usage_limit === null || option.usage_limit === undefined) {
+    return option.name
+  }
+  return `${option.name} (${option.remaining ?? 0}/${option.usage_limit})`
 }
 </script>
 
@@ -165,14 +169,14 @@ function resetUserLimits(email) {
             </button>
             <button
               class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base hover:bg-gray-50"
-              @click="$emit('download-report', item)"
+              @click="store.dispatch('downloadHistoryReport', item)"
             >
               PDF
             </button>
             <button
               :disabled="!item.source_available"
               class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base hover:bg-gray-50 disabled:opacity-40"
-              @click="$emit('download-source', item)"
+              @click="store.dispatch('downloadHistorySource', item)"
             >
               DOCX
             </button>
@@ -252,7 +256,7 @@ function resetUserLimits(email) {
         <button
           :disabled="!adminTemplateFile || adminTemplateUploadLoading"
           class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
-          @click="$emit('upload-template')"
+          @click="store.dispatch('uploadAdminTemplate')"
         >
           {{ adminTemplateUploadLoading ? 'Загружаем...' : 'Загрузить шаблон' }}
         </button>
@@ -264,7 +268,7 @@ function resetUserLimits(email) {
         <select
           :value="resetUser"
           class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
-          @change="$emit('update:resetUser', $event.target.value)"
+          @change="store.commit('setAdminResetUser', $event.target.value)"
         >
           <option value="">Все пользователи</option>
           <option v-for="user in adminUsers" :key="user.email" :value="user.email">
@@ -274,11 +278,54 @@ function resetUserLimits(email) {
         <button
           :disabled="resetLoading"
           class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
-          @click="$emit('reset-limits')"
+          @click="store.dispatch('resetUsageLimits')"
         >
           {{ resetLoading ? 'Сбрасываем...' : 'Сбросить лимиты' }}
         </button>
         <span v-if="resetMessage" class="text-base text-gray-600">{{ resetMessage }}</span>
+        <span class="text-base text-gray-500">{{ usageResetIntervalLabel }}</span>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3">
+        <label class="text-base text-gray-500">Доступно проверок:</label>
+        <select
+          :value="quotaUser"
+          class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
+          @change="store.commit('setAdminQuotaUser', $event.target.value)"
+        >
+          <option value="">Пользователь</option>
+          <option v-for="user in adminUsers" :key="user.email" :value="user.email">
+            {{ user.email }}
+          </option>
+        </select>
+        <select
+          :value="quotaModel"
+          class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
+          @change="store.commit('setAdminQuotaModel', $event.target.value)"
+        >
+          <option value="">Модель</option>
+          <option v-for="option in models" :key="option.id" :value="option.id">
+            {{ modelOptionLabel(option) }}
+          </option>
+        </select>
+        <input
+          :value="quotaAvailable"
+          type="number"
+          min="0"
+          step="1"
+          inputmode="numeric"
+          placeholder="Количество"
+          class="w-36 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
+          @input="store.commit('setAdminQuotaAvailable', $event.target.value)"
+        />
+        <button
+          :disabled="quotaLoading || !quotaUser || !quotaModel"
+          class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+          @click="store.dispatch('setUserUsageLimit')"
+        >
+          {{ quotaLoading ? 'Сохраняем...' : 'Сохранить лимит' }}
+        </button>
+        <span v-if="quotaMessage" class="text-base text-gray-600">{{ quotaMessage }}</span>
       </div>
     </div>
   </section>

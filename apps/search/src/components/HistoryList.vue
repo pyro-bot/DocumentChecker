@@ -1,13 +1,12 @@
 <script setup>
+import { computed } from 'vue'
+import { useStore } from 'vuex'
 import { formatDate } from '../utils/checkPresentation.js'
 import CheckResultDetails from './CheckResultDetails.vue'
 
-defineProps({
-  items: { type: Array, default: () => [] },
-  title: { type: String, default: 'История проверок' },
-})
-
-defineEmits(['refresh', 'download-report', 'download-source'])
+const store = useStore()
+const items = computed(() => store.state.historyItems)
+const title = 'История моих проверок'
 </script>
 
 <template>
@@ -16,7 +15,7 @@ defineEmits(['refresh', 'download-report', 'download-source'])
     <h2 class="text-base font-semibold">{{ title }}</h2>
     <button
       class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base hover:bg-gray-50"
-      @click="$emit('refresh')"
+      @click="store.dispatch('loadHistory')"
     >
       Обновить
     </button>
@@ -41,20 +40,20 @@ defineEmits(['refresh', 'download-report', 'download-source'])
       <div class="flex flex-wrap gap-2">
         <button
           class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base hover:bg-gray-50"
-          @click="item.open = !item.open"
+          @click="store.commit('toggleHistoryItemOpen', item)"
         >
           {{ item.open ? 'Скрыть' : 'Открыть' }}
         </button>
         <button
           class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base hover:bg-gray-50"
-          @click="$emit('download-report', item)"
+          @click="store.dispatch('downloadHistoryReport', item)"
         >
           PDF
         </button>
         <button
           :disabled="!item.source_available"
           class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base hover:bg-gray-50 disabled:opacity-40"
-          @click="$emit('download-source', item)"
+          @click="store.dispatch('downloadHistorySource', item)"
         >
           DOCX
         </button>

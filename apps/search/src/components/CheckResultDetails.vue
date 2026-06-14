@@ -1,4 +1,5 @@
 <script setup>
+import BibliographyResult from './BibliographyResult.vue'
 import ErrorGroups from './ErrorGroups.vue'
 import MetricsGrid from './MetricsGrid.vue'
 
@@ -6,6 +7,9 @@ defineProps({
   loading: { type: Boolean, default: false },
   error: { type: String, default: '' },
   result: { type: Object, default: null },
+  bibliographyLoading: { type: Boolean, default: false },
+  bibliographyError: { type: String, default: '' },
+  bibliographyResult: { type: Object, default: null },
   groupedErrors: { type: Object, default: () => ({}) },
   showDownload: { type: Boolean, default: true },
 })
@@ -50,5 +54,11 @@ defineEmits(['download'])
     >
       Скачать отчёт (PDF)
     </button>
+
+    <BibliographyResult
+      :loading="bibliographyLoading"
+      :error="bibliographyError"
+      :result="bibliographyResult"
+    />
   </template>
 </template>

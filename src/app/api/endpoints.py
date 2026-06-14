@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse
 from .schemas import (
     AdminUserResponse,
     AdminUsersResponse,
+    BibliographyCheckRequest,
+    BibliographyCheckResponse,
     CheckHistoryItem,
     CheckHistoryResponse,
     DEFAULT_LLM_MODEL,
@@ -28,6 +30,8 @@ from .schemas import (
     TemplateMarkdownResponse,
     TemplateMarkdownUpdateRequest,
     TemplatesResponse,
+    UsageLimitUpdateRequest,
+    UsageLimitUpdateResponse,
     UsageResetRequest,
     UsageResetResponse,
     UserResponse,
@@ -43,11 +47,13 @@ from ..services.auth import (
     get_current_user,
     user_role,
 )
+from ..services.bibliography import BibliographyCheckerService
 from ..services.comparator import ComparatorService
 from ..services.converter import ConverterService
-from ..services.model_config import ModelDefinition, ModelsConfigError, default_model_id, load_models_config
+from ..services.model_config import ModelDefinition, ModelsConfigError, bibliography_model_id, default_model_id, load_models_config
 from ..services.reports import generate_pdf_report
 from ..services.templates import TemplateService
+from ..services.usage_reset import usage_limit_reset_interval_hours
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -84,13 +90,19 @@ def _user_response(user: UserRecord) -> UserResponse:
 
 
 def _model_response(model: ModelDefinition, user: UserRecord) -> ModelResponse:
-    used_count = ModelUsageRepository().get_usage(user.email, model.id)
-    remaining = None if model.usage_limit is None else max(model.usage_limit - used_count, 0)
+    usage_repo = ModelUsageRepository()
+    used_count = usage_repo.get_usage(user.email, model.id)
+    effective_limit = (
+        None
+        if user_role(user) == "admin"
+        else usage_repo.effective_usage_limit(user.email, model.id, model.usage_limit)
+    )
+    remaining = None if effective_limit is None else max(effective_limit - used_count, 0)
     return ModelResponse(
         id=model.id,
         name=model.name,
         description=model.description,
-        usage_limit=model.usage_limit,
+        usage_limit=effective_limit,
         context_window_tokens=model.context_window_tokens,
         used_count=used_count,
         remaining=remaining,
@@ -125,7 +137,12 @@ def _get_model_or_400(model_id: str) -> ModelDefinition:
 
 
 def _consume_model_usage(user: UserRecord, model: ModelDefinition) -> None:
-    used_count = ModelUsageRepository().consume_usage(user.email, model.id, model.usage_limit)
+    if user_role(user) == "admin":
+        return
+
+    usage_repo = ModelUsageRepository()
+    usage_limit = usage_repo.effective_usage_limit(user.email, model.id, model.usage_limit)
+    used_count = usage_repo.consume_usage(user.email, model.id, usage_limit)
     if used_count is None:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -222,6 +239,7 @@ async def list_models(current_user: UserRecord = Depends(get_current_user)):
     return ModelsResponse(
         default_model=config.default_model,
         models=[_model_response(model, current_user) for model in config.models],
+        usage_limit_reset_interval_hours=usage_limit_reset_interval_hours(),
     )
 
 
@@ -395,6 +413,30 @@ async def reset_usage(
     return UsageResetResponse(reset_records=reset_records)
 
 
+@router.post("/api/admin/usage/limit", response_model=UsageLimitUpdateResponse)
+async def set_usage_limit(
+    req: UsageLimitUpdateRequest,
+    current_admin: UserRecord = Depends(get_current_admin),
+):
+    model = _get_model_or_400(req.model)
+    user = UserRepository().get_by_email(req.user_email)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    updated = ModelUsageRepository().set_available_checks(
+        user_email=user.email,
+        model_id=model.id,
+        available_checks=req.available_checks,
+    )
+    return UsageLimitUpdateResponse(
+        user_email=user.email,
+        model=model.id,
+        usage_limit=updated["usage_limit"],
+        used_count=updated["used_count"],
+        remaining=updated["remaining"],
+    )
+
+
 @router.post("/api/convert", response_model=ConvertResponse)
 async def convert_docx(
     docx_file: UploadFile = File(...),
@@ -418,6 +460,81 @@ async def convert_docx(
             image_dir=str(image_dir),
         )
         return ConvertResponse(**result)
+
+
+@router.post("/api/bibliography/check", response_model=BibliographyCheckResponse)
+async def check_bibliography(
+    req: BibliographyCheckRequest,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    selected_model = _get_model_or_400(bibliography_model_id())
+    _consume_model_usage(current_user, selected_model)
+    llm_request_queue.wait_for_turn(selected_model.id)
+
+    result = BibliographyCheckerService.check(
+        document_content=req.document_content,
+        model=selected_model.id,
+        max_references=req.max_references,
+    )
+    if not result["success"]:
+        logger.error("Bibliography check failed: %s", result["error"])
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return BibliographyCheckResponse(**result["data"])
+
+
+@router.post("/api/bibliography/check-upload", response_model=BibliographyCheckResponse)
+async def check_bibliography_upload(
+    document_file: UploadFile = File(...),
+    max_references: int = Form(30),
+    current_user: UserRecord = Depends(get_current_user),
+):
+    if max_references < 1 or max_references > 100:
+        raise HTTPException(status_code=400, detail="max_references must be between 1 and 100")
+
+    suffix = Path(document_file.filename or "").suffix.lower()
+    if suffix not in {".docx", ".txt", ".md", ".markdown"}:
+        raise HTTPException(status_code=400, detail="Supported files: .docx, .txt, .md, .markdown")
+
+    selected_model = _get_model_or_400(bibliography_model_id())
+    _consume_model_usage(current_user, selected_model)
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            doc_path = tmpdir_path / f"doc_{document_file.filename}"
+            with doc_path.open("wb") as f:
+                shutil.copyfileobj(document_file.file, f)
+
+            if suffix == ".docx":
+                output_path = tmpdir_path / "document.tex"
+                image_dir = tmpdir_path / "images"
+                image_dir.mkdir(exist_ok=True)
+                doc_res = ConverterService.convert_docx_to_latex(str(doc_path), str(output_path), str(image_dir))
+                if not doc_res["success"]:
+                    raise HTTPException(status_code=500, detail=f"Document: {doc_res['error']}")
+                document_content = doc_res["latex_content"]
+            elif suffix in {".txt", ".md", ".markdown"}:
+                document_content = doc_path.read_text(encoding="utf-8")
+
+            llm_request_queue.wait_for_turn(selected_model.id)
+            result = BibliographyCheckerService.check(
+                document_content=document_content,
+                model=selected_model.id,
+                max_references=max_references,
+            )
+            if not result["success"]:
+                logger.error("Bibliography upload check failed: %s", result["error"])
+                raise HTTPException(status_code=500, detail=result["error"])
+
+            return BibliographyCheckResponse(**result["data"])
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=415, detail="Text files must be UTF-8 encoded") from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected /api/bibliography/check-upload failure")
+        raise
 
 
 @router.post("/api/compare", response_model=CompareResponse)

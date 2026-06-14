@@ -101,6 +101,17 @@ class UserRepository:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS user_model_limits (
+                    user_email TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    usage_limit BIGINT NOT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_email, model_id)
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS user_sessions (
                     token_hash TEXT PRIMARY KEY,
                     user_email TEXT NOT NULL,
@@ -285,6 +296,66 @@ class ModelUsageRepository:
                 [user_email, model_id],
             ).fetchone()
             return int(row[0]) if row else 0
+
+    def get_custom_usage_limit(self, user_email: str, model_id: str) -> Optional[int]:
+        with duckdb_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT usage_limit
+                FROM user_model_limits
+                WHERE user_email = ? AND model_id = ?
+                """,
+                [user_email, model_id],
+            ).fetchone()
+            return int(row[0]) if row else None
+
+    def effective_usage_limit(
+        self,
+        user_email: str,
+        model_id: str,
+        default_usage_limit: Optional[int],
+    ) -> Optional[int]:
+        custom_limit = self.get_custom_usage_limit(user_email, model_id)
+        return custom_limit if custom_limit is not None else default_usage_limit
+
+    def set_available_checks(self, user_email: str, model_id: str, available_checks: int) -> dict[str, int]:
+        if available_checks < 0:
+            raise ValueError("available_checks must be non-negative")
+
+        with duckdb_connection() as connection:
+            connection.execute("BEGIN TRANSACTION")
+            try:
+                row = connection.execute(
+                    """
+                    SELECT used_count
+                    FROM model_usage
+                    WHERE user_email = ? AND model_id = ?
+                    """,
+                    [user_email, model_id],
+                ).fetchone()
+                used_count = int(row[0]) if row else 0
+                usage_limit = used_count + available_checks
+
+                connection.execute(
+                    """
+                    INSERT INTO user_model_limits (user_email, model_id, usage_limit, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_email, model_id) DO UPDATE SET
+                        usage_limit = excluded.usage_limit,
+                        updated_at = excluded.updated_at
+                    """,
+                    [user_email, model_id, usage_limit],
+                )
+
+                connection.execute("COMMIT")
+                return {
+                    "used_count": used_count,
+                    "usage_limit": usage_limit,
+                    "remaining": available_checks,
+                }
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
 
     def increment_usage(self, user_email: str, model_id: str) -> int:
         used_count = self.consume_usage(user_email, model_id, usage_limit=None)

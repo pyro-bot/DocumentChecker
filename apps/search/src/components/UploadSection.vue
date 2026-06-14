@@ -1,31 +1,23 @@
 <script setup>
+import { computed } from 'vue'
+import { useStore } from 'vuex'
+import { TEMPLATE_FILE_ACCEPT, TEMPLATE_FILE_HINT } from '../utils/templates'
 import DropZone from './DropZone.vue'
 import MultiDropZone from './MultiDropZone.vue'
 
-defineProps({
-  files: { type: Object, required: true },
-  templates: { type: Array, default: () => [] },
-  selectedTemplate: { type: String, default: '' },
-  selectedTemplateMeta: { type: Object, default: null },
-  canPreviewSelectedTemplate: { type: Boolean, default: false },
-  currentUser: { type: Object, default: null },
-  templateFileAccept: { type: String, default: '.docx,.md,.markdown' },
-  templateFileHint: { type: String, default: '.docx, .md, .markdown' },
-})
-
-const emit = defineEmits([
-  'template-file-selected',
-  'template-file-removed',
-  'documents-added',
-  'document-removed',
-  'update:selectedTemplate',
-  'template-selected',
-  'preview-template',
-])
+const store = useStore()
+const files = computed(() => store.state.files)
+const templates = computed(() => store.state.templates)
+const selectedTemplate = computed(() => store.state.selectedTemplate)
+const selectedTemplateMeta = computed(() => store.getters.selectedTemplateMeta)
+const canPreviewSelectedTemplate = computed(() => store.getters.canPreviewSelectedTemplate)
+const currentUser = computed(() => store.state.currentUser)
+const templateFileAccept = TEMPLATE_FILE_ACCEPT
+const templateFileHint = TEMPLATE_FILE_HINT
 
 function onTemplateChanged(event) {
-  emit('update:selectedTemplate', event.target.value)
-  emit('template-selected')
+  store.commit('setSelectedTemplate', event.target.value)
+  store.commit('closeTemplatePreview')
 }
 </script>
 
@@ -37,16 +29,16 @@ function onTemplateChanged(event) {
       :file="files.template"
       :accept="templateFileAccept"
       :file-hint="templateFileHint"
-      @file-selected="$emit('template-file-selected', $event)"
-      @file-removed="$emit('template-file-removed')"
+      @file-selected="store.commit('setTemplateFile', $event)"
+      @file-removed="store.commit('clearTemplateFile')"
     />
 
     <MultiDropZone
       label="Документы для проверки"
       icon="📋"
       :files="files.documents"
-      @files-added="$emit('documents-added', $event)"
-      @file-removed="$emit('document-removed', $event)"
+      @files-added="store.commit('addDocuments', $event)"
+      @file-removed="store.commit('removeDocument', $event)"
     />
   </div>
 
@@ -65,14 +57,14 @@ function onTemplateChanged(event) {
     <button
       v-if="canPreviewSelectedTemplate"
       class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 transition-colors hover:bg-gray-50"
-      @click="$emit('preview-template', false)"
+      @click="store.dispatch('openTemplatePreview', false)"
     >
       Просмотр
     </button>
     <button
       v-if="currentUser?.role === 'admin' && canPreviewSelectedTemplate"
       class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 transition-colors hover:bg-gray-50"
-      @click="$emit('preview-template', true)"
+      @click="store.dispatch('openTemplatePreview', true)"
     >
       Редактировать Markdown
     </button>

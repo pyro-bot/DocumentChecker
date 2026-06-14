@@ -1,25 +1,25 @@
 <script setup>
-defineProps({
-  open: { type: Boolean, default: false },
-  loading: { type: Boolean, default: false },
-  saving: { type: Boolean, default: false },
-  editing: { type: Boolean, default: false },
-  error: { type: String, default: '' },
-  template: { type: Object, default: null },
-  selectedTemplate: { type: String, default: '' },
-  content: { type: String, default: '' },
-  renderedHtml: { type: String, default: '' },
-  canEdit: { type: Boolean, default: false },
-})
+import { computed } from 'vue'
+import { useStore } from 'vuex'
 
-defineEmits(['close', 'update:editing', 'update:content', 'save'])
+const store = useStore()
+const open = computed(() => store.state.templatePreviewOpen)
+const loading = computed(() => store.state.templatePreviewLoading)
+const saving = computed(() => store.state.templatePreviewSaving)
+const editing = computed(() => store.state.templatePreviewEditing)
+const error = computed(() => store.state.templatePreviewError)
+const template = computed(() => store.state.templatePreviewTemplate)
+const selectedTemplate = computed(() => store.state.selectedTemplate)
+const content = computed(() => store.state.templatePreviewContent)
+const renderedHtml = computed(() => store.getters.renderedTemplateMarkdown)
+const canEdit = computed(() => store.state.currentUser?.role === 'admin')
 </script>
 
 <template>
   <div
     v-if="open"
     class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/45 px-4 py-6"
-    @click.self="$emit('close')"
+    @click.self="store.commit('closeTemplatePreview')"
   >
     <div class="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl">
       <div class="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4">
@@ -31,7 +31,7 @@ defineEmits(['close', 'update:editing', 'update:content', 'save'])
         </div>
         <button
           class="flex-shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base text-gray-700 hover:bg-gray-50"
-          @click="$emit('close')"
+          @click="store.commit('closeTemplatePreview')"
         >
           Закрыть
         </button>
@@ -50,7 +50,7 @@ defineEmits(['close', 'update:editing', 'update:content', 'save'])
           :value="content"
           class="h-[60vh] w-full resize-none rounded-lg border border-gray-200 bg-white px-4 py-3 font-mono text-base leading-relaxed text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
           spellcheck="false"
-          @input="$emit('update:content', $event.target.value)"
+          @input="store.commit('setTemplatePreviewContent', $event.target.value)"
         ></textarea>
         <div
           v-else
@@ -67,14 +67,14 @@ defineEmits(['close', 'update:editing', 'update:content', 'save'])
           <button
             v-if="canEdit && !editing && !loading && !error"
             class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
-            @click="$emit('update:editing', true)"
+            @click="store.commit('setTemplatePreviewEditing', true)"
           >
             Редактировать
           </button>
           <button
             v-if="editing"
             class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
-            @click="$emit('update:editing', false)"
+            @click="store.commit('setTemplatePreviewEditing', false)"
           >
             Показать предпросмотр
           </button>
@@ -82,7 +82,7 @@ defineEmits(['close', 'update:editing', 'update:content', 'save'])
             v-if="editing"
             :disabled="saving"
             class="rounded-lg bg-blue-600 px-4 py-2 text-base font-medium text-white hover:bg-blue-700 disabled:opacity-40"
-            @click="$emit('save')"
+            @click="store.dispatch('saveTemplateMarkdown')"
           >
             {{ saving ? 'Сохраняем...' : 'Сохранить' }}
           </button>

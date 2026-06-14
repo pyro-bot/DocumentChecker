@@ -85,12 +85,35 @@ NanoGPT uses an OpenAI-compatible chat completions API at `https://nano-gpt.com/
 
 Predefined `.docx`, `.md`, and `.markdown` templates can be placed into the `doctempletes` folder. Administrators can also upload templates from the web UI. The backend lists them through `/api/templates`, and users can select one instead of uploading a template file.
 
+Bibliography checks can flag probably fabricated references without paid catalog APIs. The backend extracts bibliography records with the `bibliography_model` configured in `models.yaml`, then verifies records against free public indexes: Crossref, OpenAlex, Semantic Scholar, Google Books, and Open Library.
+
+```yaml
+default_model: gpt-oss:120b-cloud
+bibliography_model: openai/gpt-5-nano
+```
+
+```http
+POST /api/bibliography/check
+{
+  "document_content": "...",
+  "max_references": 30
+}
+```
+
+For files, use `POST /api/bibliography/check-upload` with `document_file` and optional `max_references`. Supported files are `.docx`, `.txt`, `.md`, and `.markdown`. Results use `confirmed`, `probable`, `suspicious`, `not_found`, or `unparsed`; `suspicious` and `not_found` are review flags, not definitive proof that a source is fake.
+
 Administrators are configured in `.env`:
 ```env
 ADMIN_LOGINS=admin@example.com,second-admin@example.com
 ```
 
-Admin users can reset usage counters from the UI or through `POST /api/admin/usage/reset`.
+Separate administrator logins with commas, semicolons, spaces, or new lines. Admin users have unlimited checks. They can reset usage counters from the UI or through `POST /api/admin/usage/reset`, and can set the number of checks available to a user through `POST /api/admin/usage/limit`. The custom available checks value may be greater than the model `usage_limit` in `models.yaml`.
+
+Usage counters can also be reset automatically every N hours. Configure the interval in `.env`:
+```env
+USAGE_LIMIT_RESET_INTERVAL_HOURS=24
+```
+Use `0` or an empty value to disable automatic resets.
 
 By default the backend calls an Ollama-compatible API on the host:
 `http://host.docker.internal:11434/api/chat`.

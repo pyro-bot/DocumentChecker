@@ -1,9 +1,9 @@
 <script setup>
-defineProps({
-  currentUser: { type: Object, default: null },
-})
+import { computed } from 'vue'
+import { useStore } from 'vuex'
 
-defineEmits(['logout'])
+const store = useStore()
+const currentUser = computed(() => store.state.currentUser)
 </script>
 
 <template>
@@ -16,7 +16,7 @@ defineEmits(['logout'])
       <span class="rounded-lg border border-gray-200 bg-white px-3 py-1.5">{{ currentUser?.email }}</span>
       <button
         class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-gray-700 transition-colors hover:bg-gray-50"
-        @click="$emit('logout')"
+        @click="store.dispatch('logout')"
       >
         Выйти
       </button>

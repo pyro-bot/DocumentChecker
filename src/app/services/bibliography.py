@@ -1,0 +1,628 @@
+import logging
+import os
+import re
+from difflib import SequenceMatcher
+from typing import Any
+from urllib.parse import quote
+
+import requests
+
+from llm_pkg.comparator import _extract_response_text, _get_headers, _resolve_llm_settings
+from llm_pkg.parser import parse_llm_response
+
+logger = logging.getLogger(__name__)
+
+DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", re.IGNORECASE)
+ISBN_RE = re.compile(
+    r"\b(?:ISBN(?:-1[03])?:?\s*)?(97[89][-\s]?)?(?:\d[-\s]?){9}[\dX]\b",
+    re.IGNORECASE,
+)
+
+FREE_SOURCES = ("crossref", "openalex", "semantic_scholar", "google_books", "open_library")
+DEFAULT_TIMEOUT = (5, 14)
+
+EXTRACTION_SYSTEM_PROMPT = """
+You extract bibliography records from academic documents.
+Return strict JSON only. Do not verify sources and do not invent missing data.
+""".strip()
+
+EXTRACTION_USER_PROMPT = """
+Find the bibliography/references section in the document and extract references.
+
+Return this JSON shape:
+{{
+  "references": [
+    {{
+      "raw": "original reference text",
+      "title": "work title, if visible",
+      "authors": ["Author 1", "Author 2"],
+      "year": 2024,
+      "container": "journal, conference, collection or publisher",
+      "reference_type": "article|book|chapter|thesis|web|unknown",
+      "doi": "10....",
+      "isbn": "978..."
+    }}
+  ]
+}}
+
+Rules:
+- Keep raw text exactly enough to identify the reference.
+- If a field is absent, use an empty string, empty list, null, or "unknown".
+- Do not create DOI, ISBN, titles, years, authors, or publishers that are not present.
+- Prefer references from sections named References, Bibliography, Works Cited,
+  Список литературы, Литература, Источники, Библиографический список.
+- Limit the result to {max_references} records.
+
+Document:
+{document}
+""".strip()
+
+
+def _request_headers() -> dict[str, str]:
+    return {
+        "Accept": "application/json",
+        "User-Agent": os.getenv("BIBLIOGRAPHY_USER_AGENT", "DocumentChecker/1.0"),
+    }
+
+
+def _normalize_text(value: str) -> str:
+    value = re.sub(r"https?://\S+", " ", value or "", flags=re.IGNORECASE)
+    value = re.sub(r"doi\s*:?\s*10\.\S+", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"[^\w\s]+", " ", value.lower(), flags=re.UNICODE)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _normalize_identifier(value: str) -> str:
+    return re.sub(r"[^0-9A-Z]+", "", value or "", flags=re.IGNORECASE).upper()
+
+
+def _normalize_doi(value: str) -> str:
+    value = (value or "").strip().rstrip(".,;")
+    value = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^doi:\s*", "", value, flags=re.IGNORECASE)
+    return value.lower()
+
+
+def _first(value: Any, default: str = "") -> str:
+    if isinstance(value, list) and value:
+        return str(value[0] or "")
+    if value is None:
+        return default
+    return str(value)
+
+
+def _as_year(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, int):
+        return value if 1000 <= value <= 3000 else None
+    match = re.search(r"(19|20)\d{2}", str(value))
+    return int(match.group(0)) if match else None
+
+
+def _title_score(left: str, right: str) -> float:
+    left_norm = _normalize_text(left)
+    right_norm = _normalize_text(right)
+    if not left_norm or not right_norm:
+        return 0.0
+    ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    overlap = len(left_tokens & right_tokens) / max(len(left_tokens | right_tokens), 1)
+    return max(ratio, overlap)
+
+
+def _author_score(expected: list[str], candidate: list[str]) -> float:
+    if not expected or not candidate:
+        return 0.0
+    expected_norm = {_normalize_text(item).split()[-1] for item in expected if _normalize_text(item)}
+    candidate_norm = {_normalize_text(item).split()[-1] for item in candidate if _normalize_text(item)}
+    if not expected_norm or not candidate_norm:
+        return 0.0
+    return len(expected_norm & candidate_norm) / max(len(expected_norm), 1)
+
+
+def _confidence(reference: dict[str, Any], candidate: dict[str, Any]) -> float:
+    ref_ids = reference.get("identifiers", {})
+    cand_ids = candidate.get("identifiers", {})
+    if ref_ids.get("doi") and cand_ids.get("doi") and _normalize_doi(ref_ids["doi"]) == _normalize_doi(cand_ids["doi"]):
+        return 1.0
+    if ref_ids.get("isbn") and cand_ids.get("isbn"):
+        if _normalize_identifier(ref_ids["isbn"]) == _normalize_identifier(cand_ids["isbn"]):
+            return 1.0
+
+    score = _title_score(reference.get("title") or reference.get("raw", ""), candidate.get("title", "")) * 0.72
+    score += _author_score(reference.get("authors", []), candidate.get("authors", [])) * 0.18
+    if reference.get("year") and candidate.get("year"):
+        score += (0.10 if abs(reference["year"] - candidate["year"]) <= 1 else -0.08)
+    return max(0.0, min(1.0, score))
+
+
+def _extract_identifiers(raw: str) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    doi = DOI_RE.search(raw or "")
+    if doi:
+        identifiers["doi"] = _normalize_doi(doi.group(0))
+
+    isbn = ISBN_RE.search(raw or "")
+    if isbn:
+        raw_isbn = re.sub(r"^ISBN(?:-1[03])?:?\s*", "", isbn.group(0), flags=re.IGNORECASE)
+        normalized = _normalize_identifier(raw_isbn)
+        if len(normalized) in {10, 13}:
+            identifiers["isbn"] = normalized
+    return identifiers
+
+
+def _reference_query(reference: dict[str, Any]) -> str:
+    parts = [
+        reference.get("title", ""),
+        " ".join(reference.get("authors", [])[:2]),
+        str(reference.get("year") or ""),
+        reference.get("raw", ""),
+    ]
+    return " ".join(part for part in parts if part).strip()[:450]
+
+
+def _candidate(
+    source: str,
+    title: str = "",
+    authors: list[str] | None = None,
+    year: int | None = None,
+    container: str = "",
+    identifiers: dict[str, str] | None = None,
+    url: str = "",
+) -> dict[str, Any]:
+    return {
+        "source": source,
+        "title": title or "",
+        "authors": authors or [],
+        "year": year,
+        "container": container or "",
+        "identifiers": {key: value for key, value in (identifiers or {}).items() if value},
+        "url": url or "",
+        "confidence": 0.0,
+    }
+
+
+class BibliographyCheckerService:
+    @staticmethod
+    def check(document_content: str, model: str = "openai/gpt-5-nano", max_references: int = 30) -> dict:
+        try:
+            warnings: list[str] = []
+            references = BibliographyCheckerService._extract_references(document_content, model, max_references, warnings)
+            if not references:
+                return {
+                    "success": True,
+                    "data": {
+                        "model": model,
+                        "checked_count": 0,
+                        "summary": "No bibliography records were extracted.",
+                        "warnings": warnings,
+                        "references": [],
+                    },
+                    "error": None,
+                }
+
+            checked = [
+                BibliographyCheckerService._check_reference(index, reference)
+                for index, reference in enumerate(references[:max_references], start=1)
+            ]
+            status_counts = {status: 0 for status in ("confirmed", "probable", "suspicious", "not_found", "unparsed")}
+            for item in checked:
+                status_counts[item["status"]] = status_counts.get(item["status"], 0) + 1
+
+            warnings.append(
+                "not_found and suspicious mean that free public indexes did not confirm the record; "
+                "they are review flags, not definitive proof that the source is fake."
+            )
+            summary = (
+                f"Checked {len(checked)} references: "
+                f"{status_counts['confirmed']} confirmed, {status_counts['probable']} probable, "
+                f"{status_counts['suspicious']} suspicious, {status_counts['not_found']} not found, "
+                f"{status_counts['unparsed']} unparsed."
+            )
+            return {
+                "success": True,
+                "data": {
+                    "model": model,
+                    "checked_count": len(checked),
+                    "summary": summary,
+                    "warnings": warnings,
+                    "references": checked,
+                },
+                "error": None,
+            }
+        except Exception as exc:
+            logger.exception("Bibliography check failed")
+            return {"success": False, "data": None, "error": str(exc)}
+
+    @staticmethod
+    def _extract_references(
+        document_content: str,
+        model: str,
+        max_references: int,
+        warnings: list[str],
+    ) -> list[dict[str, Any]]:
+        try:
+            settings = _resolve_llm_settings(model)
+            payload = {
+                "model": settings.model,
+                "messages": [
+                    {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": EXTRACTION_USER_PROMPT.format(
+                            document=document_content[:120000],
+                            max_references=max_references,
+                        ),
+                    },
+                ],
+                "stream": False,
+                "temperature": 0,
+            }
+            response = requests.post(
+                settings.url,
+                json=payload,
+                headers=_get_headers(settings.api_format, settings.api_key_env),
+                timeout=300,
+            )
+            if response.ok:
+                response_text = _extract_response_text(response.json(), settings.api_format)
+                parsed = parse_llm_response(response_text)
+                references = parsed.get("references", []) if isinstance(parsed, dict) else []
+                normalized = BibliographyCheckerService._normalize_references(references)
+                if normalized:
+                    return normalized[:max_references]
+
+            warnings.append(f"LLM extraction failed or returned no records; used rule-based fallback.")
+            if not response.ok:
+                logger.warning("Bibliography extraction HTTP %s: %s", response.status_code, response.text[:500])
+        except Exception:
+            logger.exception("Bibliography LLM extraction failed; falling back to regex parser")
+            warnings.append("LLM extraction failed; used rule-based fallback.")
+
+        return BibliographyCheckerService._fallback_extract(document_content)[:max_references]
+
+    @staticmethod
+    def _normalize_references(items: list[Any]) -> list[dict[str, Any]]:
+        references: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw = str(item.get("raw") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not raw and not title:
+                continue
+
+            identifiers = _extract_identifiers(raw)
+            if item.get("doi"):
+                identifiers["doi"] = _normalize_doi(str(item["doi"]))
+            if item.get("isbn"):
+                isbn = _normalize_identifier(str(item["isbn"]))
+                if isbn:
+                    identifiers["isbn"] = isbn
+
+            authors = item.get("authors") or []
+            if not isinstance(authors, list):
+                authors = [str(authors)]
+
+            references.append(
+                {
+                    "raw": raw or title,
+                    "title": title,
+                    "authors": [str(author).strip() for author in authors if str(author).strip()],
+                    "year": _as_year(item.get("year")),
+                    "container": str(item.get("container") or "").strip(),
+                    "reference_type": str(item.get("reference_type") or item.get("type") or "unknown").strip() or "unknown",
+                    "identifiers": identifiers,
+                }
+            )
+        return references
+
+    @staticmethod
+    def _fallback_extract(document_content: str) -> list[dict[str, Any]]:
+        pattern = re.compile(
+            r"(?:список\s+литературы|библиографический\s+список|литература|источники|references|bibliography)",
+            re.IGNORECASE,
+        )
+        match = pattern.search(document_content or "")
+        section = document_content[match.start() :] if match else document_content
+        section = section[:50000]
+        chunks = re.split(r"\n\s*(?:\[\d+\]|\d+[.)])\s+", "\n" + section)
+        if len(chunks) <= 2:
+            chunks = [line for line in section.splitlines() if len(line.strip()) > 25]
+
+        references = []
+        for chunk in chunks:
+            raw = re.sub(r"\s+", " ", chunk).strip(" -\t")
+            if len(raw) < 25:
+                continue
+            year = _as_year(raw)
+            references.append(
+                {
+                    "raw": raw,
+                    "title": "",
+                    "authors": [],
+                    "year": year,
+                    "container": "",
+                    "reference_type": "unknown",
+                    "identifiers": _extract_identifiers(raw),
+                }
+            )
+        return references
+
+    @staticmethod
+    def _check_reference(index: int, reference: dict[str, Any]) -> dict[str, Any]:
+        if not reference.get("raw") and not reference.get("title"):
+            return BibliographyCheckerService._result(index, reference, "unparsed", 0.0, 0.75, "Reference could not be parsed.", [])
+
+        candidates: list[dict[str, Any]] = []
+        for fetcher in (
+            BibliographyCheckerService._crossref_candidates,
+            BibliographyCheckerService._openalex_candidates,
+            BibliographyCheckerService._semantic_scholar_candidates,
+            BibliographyCheckerService._google_books_candidates,
+            BibliographyCheckerService._open_library_candidates,
+        ):
+            try:
+                candidates.extend(fetcher(reference))
+            except Exception:
+                logger.exception("Bibliography source lookup failed: %s", fetcher.__name__)
+
+        for candidate in candidates:
+            candidate["confidence"] = round(_confidence(reference, candidate), 3)
+        candidates.sort(key=lambda item: item["confidence"], reverse=True)
+        candidates = candidates[:8]
+
+        best = candidates[0]["confidence"] if candidates else 0.0
+        strong_sources = len({candidate["source"] for candidate in candidates if candidate["confidence"] >= 0.76})
+
+        if not candidates:
+            status, suspicion, reason = "not_found", 0.92, "No matching record was found in free public indexes."
+        elif best >= 0.92 or BibliographyCheckerService._has_identifier_match(reference, candidates):
+            status, suspicion, reason = "confirmed", 0.05, "Identifier or high-confidence metadata match found."
+        elif best >= 0.76 or strong_sources >= 2:
+            status, suspicion, reason = "probable", 0.25, "Metadata match found, but identifiers are absent or not decisive."
+        else:
+            status, suspicion, reason = "suspicious", 0.72, "Only weak or conflicting metadata matches were found."
+
+        return BibliographyCheckerService._result(index, reference, status, best, suspicion, reason, candidates)
+
+    @staticmethod
+    def _result(
+        index: int,
+        reference: dict[str, Any],
+        status: str,
+        confidence: float,
+        suspicion_score: float,
+        reason: str,
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "index": index,
+            "raw": reference.get("raw", ""),
+            "title": reference.get("title", ""),
+            "authors": reference.get("authors", []),
+            "year": reference.get("year"),
+            "reference_type": reference.get("reference_type", "unknown"),
+            "identifiers": reference.get("identifiers", {}),
+            "status": status,
+            "confidence": round(confidence, 3),
+            "suspicion_score": round(suspicion_score, 3),
+            "reason": reason,
+            "candidates": candidates,
+        }
+
+    @staticmethod
+    def _has_identifier_match(reference: dict[str, Any], candidates: list[dict[str, Any]]) -> bool:
+        ref_ids = reference.get("identifiers", {})
+        for candidate in candidates:
+            cand_ids = candidate.get("identifiers", {})
+            if ref_ids.get("doi") and cand_ids.get("doi") and _normalize_doi(ref_ids["doi"]) == _normalize_doi(cand_ids["doi"]):
+                return True
+            if ref_ids.get("isbn") and cand_ids.get("isbn"):
+                if _normalize_identifier(ref_ids["isbn"]) == _normalize_identifier(cand_ids["isbn"]):
+                    return True
+        return False
+
+    @staticmethod
+    def _crossref_candidates(reference: dict[str, Any]) -> list[dict[str, Any]]:
+        doi = reference.get("identifiers", {}).get("doi")
+        if doi:
+            url = f"https://api.crossref.org/works/{quote(doi, safe='')}"
+            data = requests.get(url, headers=_request_headers(), timeout=DEFAULT_TIMEOUT).json()
+            item = data.get("message", {})
+            return [BibliographyCheckerService._crossref_candidate(item)] if item else []
+
+        query = _reference_query(reference)
+        if not query:
+            return []
+        data = requests.get(
+            "https://api.crossref.org/works",
+            params={"query.bibliographic": query, "rows": 3},
+            headers=_request_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        ).json()
+        return [BibliographyCheckerService._crossref_candidate(item) for item in data.get("message", {}).get("items", [])]
+
+    @staticmethod
+    def _crossref_candidate(item: dict[str, Any]) -> dict[str, Any]:
+        authors = [
+            " ".join(part for part in (author.get("given", ""), author.get("family", "")) if part).strip()
+            for author in item.get("author", [])
+        ]
+        issued = item.get("issued", {}).get("date-parts", [[]])
+        year = issued[0][0] if issued and issued[0] else None
+        return _candidate(
+            "crossref",
+            title=_first(item.get("title")),
+            authors=[author for author in authors if author],
+            year=_as_year(year),
+            container=_first(item.get("container-title")) or _first(item.get("publisher")),
+            identifiers={"doi": _normalize_doi(item.get("DOI", ""))},
+            url=item.get("URL", ""),
+        )
+
+    @staticmethod
+    def _openalex_candidates(reference: dict[str, Any]) -> list[dict[str, Any]]:
+        doi = reference.get("identifiers", {}).get("doi")
+        params = {"per-page": 3}
+        if doi:
+            params["filter"] = f"doi:{doi}"
+        else:
+            query = _reference_query(reference)
+            if not query:
+                return []
+            params["search"] = query
+        mailto = os.getenv("OPENALEX_MAILTO")
+        if mailto:
+            params["mailto"] = mailto
+        data = requests.get(
+            "https://api.openalex.org/works",
+            params=params,
+            headers=_request_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        ).json()
+        return [BibliographyCheckerService._openalex_candidate(item) for item in data.get("results", [])]
+
+    @staticmethod
+    def _openalex_candidate(item: dict[str, Any]) -> dict[str, Any]:
+        authorships = item.get("authorships", [])
+        authors = [
+            author.get("author", {}).get("display_name", "")
+            for author in authorships
+            if author.get("author", {}).get("display_name")
+        ]
+        source = item.get("primary_location", {}).get("source") or {}
+        return _candidate(
+            "openalex",
+            title=item.get("title", ""),
+            authors=authors,
+            year=_as_year(item.get("publication_year")),
+            container=source.get("display_name", ""),
+            identifiers={"doi": _normalize_doi(item.get("doi", ""))},
+            url=item.get("doi") or item.get("id", ""),
+        )
+
+    @staticmethod
+    def _semantic_scholar_candidates(reference: dict[str, Any]) -> list[dict[str, Any]]:
+        fields = "title,year,authors,venue,externalIds,url"
+        doi = reference.get("identifiers", {}).get("doi")
+        if doi:
+            response = requests.get(
+                f"https://api.semanticscholar.org/graph/v1/paper/DOI:{quote(doi, safe='')}",
+                params={"fields": fields},
+                headers=_request_headers(),
+                timeout=DEFAULT_TIMEOUT,
+            )
+            if response.status_code == 404:
+                return []
+            item = response.json()
+            return [BibliographyCheckerService._semantic_scholar_candidate(item)] if item else []
+
+        query = _reference_query(reference)
+        if not query:
+            return []
+        data = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={"query": query, "limit": 3, "fields": fields},
+            headers=_request_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        ).json()
+        return [BibliographyCheckerService._semantic_scholar_candidate(item) for item in data.get("data", [])]
+
+    @staticmethod
+    def _semantic_scholar_candidate(item: dict[str, Any]) -> dict[str, Any]:
+        external_ids = item.get("externalIds") or {}
+        return _candidate(
+            "semantic_scholar",
+            title=item.get("title", ""),
+            authors=[author.get("name", "") for author in item.get("authors", []) if author.get("name")],
+            year=_as_year(item.get("year")),
+            container=item.get("venue", ""),
+            identifiers={"doi": _normalize_doi(external_ids.get("DOI", ""))},
+            url=item.get("url", ""),
+        )
+
+    @staticmethod
+    def _google_books_candidates(reference: dict[str, Any]) -> list[dict[str, Any]]:
+        isbn = reference.get("identifiers", {}).get("isbn")
+        if isbn:
+            query = f"isbn:{isbn}"
+        else:
+            title = reference.get("title") or reference.get("raw", "")
+            authors = " ".join(reference.get("authors", [])[:1])
+            query = " ".join(part for part in (f'intitle:"{title[:120]}"', authors) if part)
+        if not query:
+            return []
+        data = requests.get(
+            "https://www.googleapis.com/books/v1/volumes",
+            params={"q": query, "maxResults": 3},
+            headers=_request_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        ).json()
+        return [BibliographyCheckerService._google_books_candidate(item) for item in data.get("items", [])]
+
+    @staticmethod
+    def _google_books_candidate(item: dict[str, Any]) -> dict[str, Any]:
+        volume = item.get("volumeInfo", {})
+        identifiers = {}
+        for ident in volume.get("industryIdentifiers", []):
+            if ident.get("type") in {"ISBN_10", "ISBN_13"} and ident.get("identifier"):
+                identifiers["isbn"] = _normalize_identifier(ident["identifier"])
+                break
+        return _candidate(
+            "google_books",
+            title=volume.get("title", ""),
+            authors=volume.get("authors", []) or [],
+            year=_as_year(volume.get("publishedDate")),
+            container=volume.get("publisher", ""),
+            identifiers=identifiers,
+            url=volume.get("infoLink", ""),
+        )
+
+    @staticmethod
+    def _open_library_candidates(reference: dict[str, Any]) -> list[dict[str, Any]]:
+        isbn = reference.get("identifiers", {}).get("isbn")
+        if isbn:
+            response = requests.get(
+                f"https://openlibrary.org/isbn/{quote(isbn, safe='')}.json",
+                headers=_request_headers(),
+                timeout=DEFAULT_TIMEOUT,
+            )
+            if response.status_code == 404:
+                return []
+            item = response.json()
+            return [BibliographyCheckerService._open_library_candidate(item, isbn=isbn)]
+
+        title = reference.get("title") or reference.get("raw", "")
+        if not title:
+            return []
+        data = requests.get(
+            "https://openlibrary.org/search.json",
+            params={"title": title[:180], "author": " ".join(reference.get("authors", [])[:1]), "limit": 3},
+            headers=_request_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        ).json()
+        return [BibliographyCheckerService._open_library_candidate(item) for item in data.get("docs", [])]
+
+    @staticmethod
+    def _open_library_candidate(item: dict[str, Any], isbn: str = "") -> dict[str, Any]:
+        identifiers = {"isbn": isbn}
+        if not isbn:
+            isbn_values = item.get("isbn") or []
+            if isbn_values:
+                identifiers["isbn"] = _normalize_identifier(isbn_values[0])
+        title = item.get("title", "")
+        authors = item.get("author_name") or []
+        year = item.get("first_publish_year") or item.get("publish_date")
+        publishers = item.get("publisher") or []
+        return _candidate(
+            "open_library",
+            title=title,
+            authors=authors,
+            year=_as_year(year),
+            container=_first(publishers),
+            identifiers=identifiers,
+            url=f"https://openlibrary.org{item.get('key', '')}" if item.get("key") else "",
+        )

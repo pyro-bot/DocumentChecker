@@ -36,6 +36,7 @@ class ModelDefinition:
 @dataclass(frozen=True)
 class ModelsConfig:
     default_model: str
+    bibliography_model: str
     models: tuple[ModelDefinition, ...]
     endpoints: tuple[EndpointDefinition, ...] = ()
 
@@ -150,7 +151,16 @@ def _parse_models_config(raw: dict[str, Any]) -> ModelsConfig:
     if default_model not in seen:
         raise ModelsConfigError("default_model must reference a model from the models list")
 
-    return ModelsConfig(default_model=default_model, models=tuple(models), endpoints=endpoints)
+    bibliography_model = str(raw.get("bibliography_model") or raw.get("references_model") or "openai/gpt-5-nano").strip()
+    if bibliography_model not in seen:
+        raise ModelsConfigError("bibliography_model must reference a model from the models list")
+
+    return ModelsConfig(
+        default_model=default_model,
+        bibliography_model=bibliography_model,
+        models=tuple(models),
+        endpoints=endpoints,
+    )
 
 
 def _parse_endpoints(raw_endpoints: Any) -> tuple[EndpointDefinition, ...]:
@@ -196,3 +206,7 @@ def _parse_endpoints(raw_endpoints: Any) -> tuple[EndpointDefinition, ...]:
 
 def default_model_id() -> str:
     return load_models_config().default_model
+
+
+def bibliography_model_id() -> str:
+    return load_models_config().bibliography_model
