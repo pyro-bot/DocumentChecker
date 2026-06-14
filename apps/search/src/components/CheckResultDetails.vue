@@ -56,6 +56,7 @@ defineEmits(['download'])
     </button>
 
     <BibliographyResult
+      v-if="bibliographyLoading || bibliographyError || bibliographyResult"
       :loading="bibliographyLoading"
       :error="bibliographyError"
       :result="bibliographyResult"

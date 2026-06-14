@@ -119,7 +119,12 @@ export const checksStore = {
       commit('resetBibliography', fileResult)
 
       try {
-        const result = await documentCheckerApi.checkBibliographyUpload(state.authToken, fileResult.file, 30)
+        const result = await documentCheckerApi.checkBibliographyUpload(
+          state.authToken,
+          fileResult.file,
+          30,
+          fileResult.result?.check_id,
+        )
         commit('setBibliographyResult', { fileResult, result })
       } catch (error) {
         if (error.status === 401) {

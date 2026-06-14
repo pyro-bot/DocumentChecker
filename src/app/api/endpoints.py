@@ -487,6 +487,7 @@ async def check_bibliography(
 async def check_bibliography_upload(
     document_file: UploadFile = File(...),
     max_references: int = Form(30),
+    check_id: str | None = Form(None),
     current_user: UserRecord = Depends(get_current_user),
 ):
     if max_references < 1 or max_references > 100:
@@ -526,6 +527,18 @@ async def check_bibliography_upload(
             if not result["success"]:
                 logger.error("Bibliography upload check failed: %s", result["error"])
                 raise HTTPException(status_code=500, detail=result["error"])
+
+            if check_id:
+                history_repo = CheckHistoryRepository()
+                history_record = history_repo.get_by_id(check_id)
+                if history_record is None:
+                    raise HTTPException(status_code=404, detail="Check result not found")
+                _require_history_access(history_record, current_user)
+                updated_result = {
+                    **history_record.result,
+                    "bibliography_result": result["data"],
+                }
+                history_repo.update_result(check_id, updated_result)
 
             return BibliographyCheckResponse(**result["data"])
     except UnicodeDecodeError as exc:

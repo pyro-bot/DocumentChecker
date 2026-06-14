@@ -97,10 +97,13 @@ export function validateUpload(token, { selectedTemplate, templateFile, document
   })
 }
 
-export function checkBibliographyUpload(token, documentFile, maxReferences = 30) {
+export function checkBibliographyUpload(token, documentFile, maxReferences = 30, checkId = null) {
   const formData = new FormData()
   formData.append('document_file', documentFile)
   formData.append('max_references', String(maxReferences))
+  if (checkId) {
+    formData.append('check_id', checkId)
+  }
 
   return requestJson('/bibliography/check-upload', {
     token,

@@ -62,6 +62,7 @@ const title = 'История моих проверок'
       <div v-if="item.open" class="w-full pt-3">
         <CheckResultDetails
           :result="item.result"
+          :bibliography-result="item.bibliographyResult"
           :grouped-errors="item.groupedErrors"
           :show-download="false"
         />

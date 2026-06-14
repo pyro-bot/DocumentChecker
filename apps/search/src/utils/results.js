@@ -8,10 +8,12 @@ export function buildGroupedErrors(errors = []) {
 }
 
 export function normalizeHistoryItem(item) {
+  const result = item.result || { errors: [], compliance_score: item.compliance_score || 0, summary: '' }
   return {
     ...item,
     open: Boolean(item.open),
-    result: item.result || { errors: [], compliance_score: item.compliance_score || 0, summary: '' },
-    groupedErrors: buildGroupedErrors(item.result?.errors || []),
+    result,
+    bibliographyResult: result.bibliography_result || null,
+    groupedErrors: buildGroupedErrors(result.errors || []),
   }
 }

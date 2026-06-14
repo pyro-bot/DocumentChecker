@@ -47,6 +47,7 @@ Return this JSON shape:
 
 Rules:
 - Keep raw text exactly enough to identify the reference.
+- Ignore LaTeX commands, LaTeX comments, document preamble, and converter formatting metadata.
 - If a field is absent, use an empty string, empty list, null, or "unknown".
 - Do not create DOI, ISBN, titles, years, authors, or publishers that are not present.
 - Prefer references from sections named References, Bibliography, Works Cited,
@@ -56,6 +57,22 @@ Rules:
 Document:
 {document}
 """.strip()
+
+LATEX_COMMAND_LINE_RE = re.compile(
+    r"^\s*\\(?:documentclass|usepackage|geometry|setmainfont|begin|end|title|author|date|maketitle|tableofcontents)\b",
+    re.IGNORECASE,
+)
+LATEX_SECTION_RE = re.compile(r"\\(?:part|chapter|section|subsection|subsubsection)\*?\{([^{}]*)\}")
+LATEX_INLINE_COMMAND_RE = re.compile(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?(?:\{([^{}]*)\})?")
+NOISE_REFERENCE_RE = re.compile(
+    r"(?:"
+    r"\\usepackage|\\documentclass|\\begin\{|\\end\{|"
+    r"формат\s+абзаца|источник\s+(?:шрифта|размера|жирного|курсива|подчеркивания|выравнивания)|"
+    r"размер\s+шрифта|межстрочный\s+интервал|правило\s+межстрочного|"
+    r"ручной\s+разрыв\s+страницы|разрыв\s+страницы\s+word"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _request_headers() -> dict[str, str]:
@@ -70,6 +87,40 @@ def _normalize_text(value: str) -> str:
     value = re.sub(r"doi\s*:?\s*10\.\S+", " ", value, flags=re.IGNORECASE)
     value = re.sub(r"[^\w\s]+", " ", value.lower(), flags=re.UNICODE)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _strip_latex_noise(document_content: str) -> str:
+    cleaned_lines: list[str] = []
+    for line in (document_content or "").splitlines():
+        if LATEX_COMMAND_LINE_RE.search(line):
+            continue
+
+        line = re.sub(r"(?<!\\)%.*$", "", line)
+        line = LATEX_SECTION_RE.sub(r"\1", line)
+        line = LATEX_INLINE_COMMAND_RE.sub(lambda match: match.group(1) or " ", line)
+        line = line.replace(r"\&", "&").replace(r"\%", "%")
+        line = re.sub(r"[{}]", " ", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
+
+
+def _is_noise_reference(reference: dict[str, Any]) -> bool:
+    raw = str(reference.get("raw") or reference.get("title") or "").strip()
+    if not raw:
+        return True
+
+    if raw.startswith(("\\", "%")):
+        return True
+
+    if NOISE_REFERENCE_RE.search(raw):
+        return True
+
+    normalized = _normalize_text(raw)
+    meaningful_tokens = [token for token in normalized.split() if len(token) > 2]
+    return len(meaningful_tokens) < 3
 
 
 def _normalize_identifier(value: str) -> str:
@@ -189,7 +240,13 @@ class BibliographyCheckerService:
     def check(document_content: str, model: str = "openai/gpt-5-nano", max_references: int = 30) -> dict:
         try:
             warnings: list[str] = []
-            references = BibliographyCheckerService._extract_references(document_content, model, max_references, warnings)
+            searchable_content = _strip_latex_noise(document_content)
+            references = BibliographyCheckerService._extract_references(
+                searchable_content,
+                model,
+                max_references,
+                warnings,
+            )
             if not references:
                 return {
                     "success": True,
@@ -317,7 +374,7 @@ class BibliographyCheckerService:
                     "identifiers": identifiers,
                 }
             )
-        return references
+        return [reference for reference in references if not _is_noise_reference(reference)]
 
     @staticmethod
     def _fallback_extract(document_content: str) -> list[dict[str, Any]]:
@@ -349,7 +406,7 @@ class BibliographyCheckerService:
                     "identifiers": _extract_identifiers(raw),
                 }
             )
-        return references
+        return [reference for reference in references if not _is_noise_reference(reference)]
 
     @staticmethod
     def _check_reference(index: int, reference: dict[str, Any]) -> dict[str, Any]:

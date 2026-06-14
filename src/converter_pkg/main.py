@@ -12,6 +12,7 @@ from pylatex import Command, NoEscape
 from .text import parse_paragraphs, parse_list_paragraphs
 from .tables import parse_table
 from .images import extract_images, get_image_rel_ids
+from .utils import is_list_paragraph
 
 
 
@@ -70,7 +71,7 @@ def convert_to_latex(docx_path, output_path, image_dir='documents/output/images'
                         latex_doc.append(NoEscape(r'\end{figure}'))
                 continue
 
-            if paragraphs.style.name in ['List Paragraph', 'List Number', 'List Bullet']:
+            if is_list_paragraph(paragraphs):
                 flag_itemize, flag_enumerate = parse_list_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate)
             else:
                 flag_itemize, flag_enumerate = parse_paragraphs(paragraphs, latex_doc, flag_itemize, flag_enumerate)

@@ -492,6 +492,24 @@ class CheckHistoryRepository:
             return self._list(where_sql="WHERE user_email = ?", params=[user_email])
         return self._list(where_sql="", params=[])
 
+    def update_result(self, check_id: str, result: dict[str, Any]) -> Optional[CheckHistoryRecord]:
+        compliance_score = int(result.get("compliance_score") or 0)
+        errors_count = len(result.get("errors") or [])
+        result_json = json.dumps(result, ensure_ascii=False)
+
+        with duckdb_connection() as connection:
+            connection.execute(
+                """
+                UPDATE check_history
+                SET result_json = ?,
+                    compliance_score = ?,
+                    errors_count = ?
+                WHERE id = ?
+                """,
+                [result_json, compliance_score, errors_count, check_id],
+            )
+            return self.get_by_id(check_id, connection=connection)
+
     def get_by_id(
         self,
         check_id: str,
