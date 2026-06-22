@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useStore } from 'vuex'
 import { formatDate } from '../utils/checkPresentation.js'
+import { historyModelLabel, historyTemplateLabel } from '../utils/results'
 import { TEMPLATE_FILE_ACCEPT } from '../utils/templates'
 import CheckResultDetails from './CheckResultDetails.vue'
 
@@ -159,6 +160,12 @@ function modelOptionLabel(option) {
             <div class="text-lg text-gray-400">
               {{ item.user_email }} · {{ formatDate(item.created_at) }} · {{ item.compliance_score }}% · ошибок: {{ item.errors_count }}
             </div>
+            <div class="text-base text-gray-500">
+              Нейросеть: {{ historyModelLabel(item) }}
+            </div>
+            <div class="text-base text-gray-500">
+              Шаблон: {{ historyTemplateLabel(item) }}
+            </div>
           </div>
           <div class="flex flex-wrap gap-2">
             <button
@@ -179,6 +186,13 @@ function modelOptionLabel(option) {
               @click="store.dispatch('downloadHistorySource', item)"
             >
               DOCX
+            </button>
+            <button
+              v-if="item.template_download_available"
+              class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base hover:bg-gray-50"
+              @click="store.dispatch('downloadHistoryTemplate', item)"
+            >
+              Шаблон
             </button>
           </div>
 

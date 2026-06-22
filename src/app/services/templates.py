@@ -49,7 +49,7 @@ class TemplateService:
 
         destination = (self.template_dir / safe_name).resolve()
         if self.template_dir not in destination.parents:
-            raise ValueError("Invalid template filename")
+            raise ValueError("Некорректное имя файла шаблона")
 
         with destination.open("wb") as file:
             shutil.copyfileobj(source, file)
@@ -63,25 +63,25 @@ class TemplateService:
 
     def resolve_template_path(self, template_id: str) -> Path:
         if not template_id or Path(template_id).name != template_id:
-            raise FileNotFoundError("Invalid template id")
+            raise FileNotFoundError("Некорректный идентификатор шаблона")
 
         path = (self.template_dir / template_id).resolve()
         if self.template_dir not in path.parents:
-            raise FileNotFoundError("Invalid template id")
+            raise FileNotFoundError("Некорректный идентификатор шаблона")
         if not path.is_file() or path.suffix.lower() not in ALLOWED_TEMPLATE_SUFFIXES:
-            raise FileNotFoundError("Template not found")
+            raise FileNotFoundError("Шаблон не найден")
         return path
 
     def read_markdown_template(self, template_id: str) -> str:
         path = self.resolve_template_path(template_id)
         if self._template_kind(path) != "markdown":
-            raise ValueError("Only Markdown templates can be opened as text")
+            raise ValueError("Как текст можно открыть только Markdown-шаблоны")
         return path.read_text(encoding="utf-8")
 
     def update_markdown_template(self, template_id: str, content: str) -> TemplateDefinition:
         path = self.resolve_template_path(template_id)
         if self._template_kind(path) != "markdown":
-            raise ValueError("Only Markdown templates can be edited as text")
+            raise ValueError("Как текст можно редактировать только Markdown-шаблоны")
         path.write_text(content, encoding="utf-8")
         return TemplateDefinition(
             id=path.name,
@@ -98,15 +98,15 @@ class TemplateService:
     def _safe_template_filename(filename: str | None) -> str:
         raw_name = Path(filename or "").name.strip()
         if not raw_name:
-            raise ValueError("Template filename is required")
+            raise ValueError("Укажите имя файла шаблона")
 
         suffix = Path(raw_name).suffix.lower()
         if suffix not in ALLOWED_TEMPLATE_SUFFIXES:
-            raise ValueError("Only .docx, .md or .markdown templates are allowed")
+            raise ValueError("Разрешены только шаблоны .docx, .md или .markdown")
 
         stem = Path(raw_name).stem.strip().strip(".")
         stem = INVALID_FILENAME_CHARS.sub("_", stem).strip()
         if not stem:
-            raise ValueError("Template filename is required")
+            raise ValueError("Укажите имя файла шаблона")
 
         return f"{stem}{suffix}"

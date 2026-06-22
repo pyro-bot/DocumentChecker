@@ -14,16 +14,16 @@ export function logout(token) {
   return requestJson('/auth/logout', { token, method: 'POST' })
 }
 
-export function fetchCurrentUser(token) {
-  return requestJson('/auth/me', { token })
+export function fetchCurrentUser(token, options = {}) {
+  return requestJson('/auth/me', { token, ...options })
 }
 
-export function fetchModels(token) {
-  return requestJson('/models', { token })
+export function fetchModels(token, options = {}) {
+  return requestJson('/models', { token, ...options })
 }
 
-export function fetchTemplates(token) {
-  return requestJson('/templates', { token })
+export function fetchTemplates(token, options = {}) {
+  return requestJson('/templates', { token, ...options })
 }
 
 export function fetchTemplateMarkdown(token, templateId) {
@@ -39,17 +39,17 @@ export function saveTemplateMarkdown(token, templateId, content) {
   })
 }
 
-export function fetchHistory(token) {
-  return requestJson('/history', { token })
+export function fetchHistory(token, options = {}) {
+  return requestJson('/history', { token, ...options })
 }
 
-export function fetchAdminUsers(token) {
-  return requestJson('/admin/users', { token })
+export function fetchAdminUsers(token, options = {}) {
+  return requestJson('/admin/users', { token, ...options })
 }
 
-export function fetchAdminChecks(token, userEmail = '') {
+export function fetchAdminChecks(token, userEmail = '', options = {}) {
   const suffix = userEmail ? `?user_email=${encodeURIComponent(userEmail)}` : ''
-  return requestJson(`/admin/checks${suffix}`, { token })
+  return requestJson(`/admin/checks${suffix}`, { token, ...options })
 }
 
 export function resetUsageLimits(token, { userEmail = null, model = null } = {}) {
@@ -123,5 +123,12 @@ export function downloadHistorySource(token, item) {
   return requestBlob(`/history/${item.id}/source`, {
     token,
     fallbackName: item.document_name || 'document.docx',
+  })
+}
+
+export function downloadHistoryTemplate(token, item) {
+  return requestBlob(`/history/${item.id}/template`, {
+    token,
+    fallbackName: item.template_name || 'template',
   })
 }

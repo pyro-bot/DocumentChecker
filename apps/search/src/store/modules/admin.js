@@ -72,17 +72,22 @@ export const adminStore = {
   },
 
   actions: {
-    async loadAdminData({ dispatch }) {
-      await Promise.all([dispatch('loadAdminUsers'), dispatch('loadAdminChecks')])
+    async loadAdminData({ dispatch }, options = {}) {
+      await Promise.all([
+        dispatch('loadAdminUsers', options),
+        dispatch('loadAdminChecks', { requestOptions: options }),
+      ])
     },
-    async loadAdminUsers({ state, commit }) {
-      const data = await documentCheckerApi.fetchAdminUsers(state.authToken)
+    async loadAdminUsers({ state, commit }, options = {}) {
+      const data = await documentCheckerApi.fetchAdminUsers(state.authToken, options)
       commit('setAdminUsers', data.users || [])
     },
-    async loadAdminChecks({ state, commit }, selectedUser = state.adminChecksUser) {
+    async loadAdminChecks({ state, commit }, payload = state.adminChecksUser) {
+      const selectedUser = typeof payload === 'object' ? payload.selectedUser ?? state.adminChecksUser : payload
+      const requestOptions = typeof payload === 'object' ? payload.requestOptions || {} : {}
       const userEmail = selectedUser || ''
       commit('setAdminChecksUser', userEmail)
-      const data = await documentCheckerApi.fetchAdminChecks(state.authToken, userEmail)
+      const data = await documentCheckerApi.fetchAdminChecks(state.authToken, userEmail, requestOptions)
       commit('setAdminChecks', data.checks || [])
     },
     async resetUsageLimits({ state, commit, dispatch }, userEmail = state.adminResetUser) {
@@ -105,10 +110,11 @@ export const adminStore = {
       }
     },
     async setUserUsageLimit({ state, commit, dispatch }) {
-      const availableChecks = Number(state.adminQuotaAvailable)
+      const availableRaw = String(state.adminQuotaAvailable).trim()
+      const availableChecks = Number(availableRaw)
       commit('setAdminQuotaMessage', '')
 
-      if (!state.adminQuotaUser || !state.adminQuotaModel || !Number.isInteger(availableChecks) || availableChecks < 0) {
+      if (!state.adminQuotaUser || !state.adminQuotaModel || !/^\d+$/.test(availableRaw) || !Number.isSafeInteger(availableChecks)) {
         commit('setAdminQuotaMessage', 'Введите пользователя, модель и количество')
         return
       }

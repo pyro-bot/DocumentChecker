@@ -24,6 +24,7 @@ class ModelDefinition:
     name: str
     description: str
     usage_limit: Optional[int]
+    rate_limit: Optional[float]
     context_window_tokens: Optional[int]
     endpoint_id: Optional[str]
     request_model: str
@@ -108,6 +109,21 @@ def _parse_models_config(raw: dict[str, Any]) -> ModelsConfig:
             if usage_limit < 0:
                 raise ModelsConfigError(f"usage_limit must be non-negative for model: {model_id}")
 
+        raw_rate_limit = next(
+            (
+                item[key]
+                for key in ("rate_limit", "rate_limit_rpm", "requests_per_minute", "llm_requests_per_minute")
+                if key in item
+            ),
+            None,
+        )
+        if raw_rate_limit in (None, ""):
+            rate_limit = None
+        else:
+            rate_limit = float(raw_rate_limit)
+            if rate_limit < 0:
+                raise ModelsConfigError(f"rate_limit must be non-negative for model: {model_id}")
+
         raw_context_window = next(
             (
                 item[key]
@@ -137,6 +153,7 @@ def _parse_models_config(raw: dict[str, Any]) -> ModelsConfig:
                 name=str(item.get("name") or model_id),
                 description=str(item.get("description") or ""),
                 usage_limit=usage_limit,
+                rate_limit=rate_limit,
                 context_window_tokens=context_window_tokens,
                 endpoint_id=endpoint_id,
                 request_model=str(item.get("request_model") or item.get("model") or model_id).strip(),

@@ -11,6 +11,7 @@ import duckdb
 
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parents[2] / "data" / "document_checker.duckdb"
+MAX_SAFE_USAGE_LIMIT = 9_007_199_254_740_991
 
 
 def database_path() -> Path:
@@ -64,6 +65,9 @@ class CheckHistoryRecord:
     user_email: str
     document_name: str
     template_name: Optional[str]
+    template_source: Optional[str]
+    template_file_path: Optional[str]
+    template_content_type: Optional[str]
     model_id: str
     result: dict[str, Any]
     compliance_score: int
@@ -128,6 +132,9 @@ class UserRepository:
                     user_email TEXT NOT NULL,
                     document_name TEXT NOT NULL,
                     template_name TEXT,
+                    template_source TEXT,
+                    template_file_path TEXT,
+                    template_content_type TEXT,
                     model_id TEXT NOT NULL,
                     result_json TEXT NOT NULL,
                     compliance_score BIGINT NOT NULL DEFAULT 0,
@@ -138,6 +145,21 @@ class UserRepository:
                 )
                 """
             )
+            self._ensure_check_history_columns(connection)
+
+    @staticmethod
+    def _ensure_check_history_columns(connection: duckdb.DuckDBPyConnection) -> None:
+        existing_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info('check_history')").fetchall()
+        }
+        for column_name, column_type in {
+            "template_source": "TEXT",
+            "template_file_path": "TEXT",
+            "template_content_type": "TEXT",
+        }.items():
+            if column_name not in existing_columns:
+                connection.execute(f"ALTER TABLE check_history ADD COLUMN {column_name} {column_type}")
 
     def upsert_after_login(self, email: str, redirect: Optional[str], auth_payload: dict[str, Any]) -> UserRecord:
         payload = json.dumps(auth_payload, ensure_ascii=False)
@@ -321,6 +343,8 @@ class ModelUsageRepository:
     def set_available_checks(self, user_email: str, model_id: str, available_checks: int) -> dict[str, int]:
         if available_checks < 0:
             raise ValueError("available_checks must be non-negative")
+        if available_checks > MAX_SAFE_USAGE_LIMIT:
+            raise ValueError("available_checks exceeds the supported maximum")
 
         with duckdb_connection() as connection:
             connection.execute("BEGIN TRANSACTION")
@@ -334,6 +358,8 @@ class ModelUsageRepository:
                     [user_email, model_id],
                 ).fetchone()
                 used_count = int(row[0]) if row else 0
+                if available_checks > MAX_SAFE_USAGE_LIMIT - used_count:
+                    raise ValueError("usage_limit exceeds the supported maximum")
                 usage_limit = used_count + available_checks
 
                 connection.execute(
@@ -442,6 +468,9 @@ class CheckHistoryRepository:
         result: dict[str, Any],
         source_file_path: Optional[str],
         source_content_type: Optional[str],
+        template_source: Optional[str] = None,
+        template_file_path: Optional[str] = None,
+        template_content_type: Optional[str] = None,
     ) -> CheckHistoryRecord:
         check_id = str(uuid.uuid4())
         compliance_score = int(result.get("compliance_score") or 0)
@@ -456,6 +485,9 @@ class CheckHistoryRepository:
                     user_email,
                     document_name,
                     template_name,
+                    template_source,
+                    template_file_path,
+                    template_content_type,
                     model_id,
                     result_json,
                     compliance_score,
@@ -464,13 +496,16 @@ class CheckHistoryRepository:
                     source_content_type,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 [
                     check_id,
                     user_email,
                     document_name,
                     template_name,
+                    template_source,
+                    template_file_path,
+                    template_content_type,
                     model_id,
                     result_json,
                     compliance_score,
@@ -523,6 +558,9 @@ class CheckHistoryRepository:
                     user_email,
                     document_name,
                     template_name,
+                    template_source,
+                    template_file_path,
+                    template_content_type,
                     model_id,
                     result_json,
                     compliance_score,
@@ -552,6 +590,9 @@ class CheckHistoryRepository:
                     user_email,
                     document_name,
                     template_name,
+                    template_source,
+                    template_file_path,
+                    template_content_type,
                     model_id,
                     result_json,
                     compliance_score,
@@ -574,11 +615,14 @@ class CheckHistoryRepository:
             user_email=row[1],
             document_name=row[2],
             template_name=row[3],
-            model_id=row[4],
-            result=json.loads(row[5]),
-            compliance_score=int(row[6] or 0),
-            errors_count=int(row[7] or 0),
-            source_file_path=row[8],
-            source_content_type=row[9],
-            created_at=row[10],
+            template_source=row[4],
+            template_file_path=row[5],
+            template_content_type=row[6],
+            model_id=row[7],
+            result=json.loads(row[8]),
+            compliance_score=int(row[9] or 0),
+            errors_count=int(row[10] or 0),
+            source_file_path=row[11],
+            source_content_type=row[12],
+            created_at=row[13],
         )

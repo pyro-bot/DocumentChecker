@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useStore } from 'vuex'
 import { formatDate } from '../utils/checkPresentation.js'
+import { historyModelLabel, historyTemplateLabel } from '../utils/results'
 import CheckResultDetails from './CheckResultDetails.vue'
 
 const store = useStore()
@@ -33,7 +34,13 @@ const title = 'История моих проверок'
       <div class="min-w-0">
         <div class="break-all text-base font-medium text-gray-800">{{ item.document_name }}</div>
         <div class="text-lg text-gray-400">
-          {{ formatDate(item.created_at) }} · {{ item.model_id }} · {{ item.compliance_score }}% · ошибок: {{ item.errors_count }}
+          {{ formatDate(item.created_at) }} · {{ item.compliance_score }}% · ошибок: {{ item.errors_count }}
+        </div>
+        <div class="text-base text-gray-500">
+          Нейросеть: {{ historyModelLabel(item) }}
+        </div>
+        <div class="text-base text-gray-500">
+          Шаблон: {{ historyTemplateLabel(item) }}
         </div>
       </div>
 
@@ -56,6 +63,13 @@ const title = 'История моих проверок'
           @click="store.dispatch('downloadHistorySource', item)"
         >
           DOCX
+        </button>
+        <button
+          v-if="item.template_download_available"
+          class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-base hover:bg-gray-50"
+          @click="store.dispatch('downloadHistoryTemplate', item)"
+        >
+          Шаблон
         </button>
       </div>
 

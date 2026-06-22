@@ -16,7 +16,7 @@ from ..database import SessionRepository, UserRecord, UserRepository
 
 ITPORT_BASE_URL = "https://itport.ugrasu.ru"
 AUTH_TIMEOUT_SECONDS = 30
-SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "12"))
+SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "168"))
 
 security = HTTPBearer(auto_error=False)
 

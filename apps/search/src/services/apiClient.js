@@ -33,9 +33,42 @@ function authHeaders(token) {
 }
 
 export async function apiFetch(path, options = {}) {
-  const { token, headers: requestHeaders = {}, ...fetchOptions } = options
+  const {
+    token,
+    headers: requestHeaders = {},
+    timeoutMs = 0,
+    signal,
+    ...fetchOptions
+  } = options
   const headers = { ...requestHeaders, ...authHeaders(token) }
-  return fetch(apiUrl(path), { ...fetchOptions, headers })
+  let timeoutId = null
+  let requestSignal = signal
+  let controller = null
+
+  if (timeoutMs > 0) {
+    controller = new AbortController()
+    requestSignal = controller.signal
+    timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort()
+      } else {
+        signal.addEventListener('abort', () => controller.abort(), { once: true })
+      }
+    }
+  }
+
+  try {
+    return await fetch(apiUrl(path), { ...fetchOptions, headers, signal: requestSignal })
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new ApiError('Превышено время ожидания ответа сервера', 408)
+    }
+    throw error
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId)
+  }
 }
 
 export async function requestJson(path, options = {}) {

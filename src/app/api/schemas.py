@@ -17,15 +17,15 @@ class ConvertResponse(BaseModel):
 
 
 class CompareRequest(BaseModel):
-    template_content: str = Field(..., min_length=10, description="Template text")
-    document_content: str = Field(..., min_length=10, description="Document text")
-    model: str = Field(default=DEFAULT_LLM_MODEL, description="LLM model")
-    parallel: bool = Field(default=True, description="Run checks in parallel")
+    template_content: str = Field(..., min_length=10, description="Текст шаблона")
+    document_content: str = Field(..., min_length=10, description="Текст документа")
+    model: str = Field(default=DEFAULT_LLM_MODEL, description="Модель LLM")
+    parallel: bool = Field(default=True, description="Выполнять проверки параллельно")
 
 
 class BibliographyCheckRequest(BaseModel):
-    document_content: str = Field(..., min_length=10, description="Document text")
-    max_references: int = Field(default=30, ge=1, le=100, description="Maximum references to check")
+    document_content: str = Field(..., min_length=10, description="Текст документа")
+    max_references: int = Field(default=30, ge=1, le=100, description="Максимальное число источников для проверки")
 
 
 class ErrorItem(BaseModel):
@@ -60,6 +60,11 @@ class BibliographyReferenceCheck(BaseModel):
     title: str = ""
     authors: List[str] = Field(default_factory=list)
     year: Optional[int] = None
+    container: str = ""
+    publisher: str = ""
+    url: str = ""
+    search_queries: List[str] = Field(default_factory=list)
+    bibliographic_record: str = ""
     reference_type: str = "unknown"
     identifiers: dict[str, str] = Field(default_factory=dict)
     status: Literal["confirmed", "probable", "suspicious", "not_found", "unparsed"]
@@ -83,8 +88,8 @@ class HealthResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(..., min_length=1, description="ITPort login or email")
-    password: str = Field(..., min_length=1, description="ITPort password")
+    username: str = Field(..., min_length=1, description="Логин или email ITPort")
+    password: str = Field(..., min_length=1, description="Пароль ITPort")
 
 
 class UserResponse(BaseModel):
@@ -106,6 +111,7 @@ class ModelResponse(BaseModel):
     name: str
     description: str = ""
     usage_limit: Optional[int] = None
+    rate_limit: Optional[float] = None
     context_window_tokens: Optional[int] = None
     used_count: int = 0
     remaining: Optional[int] = None
@@ -136,12 +142,12 @@ class TemplateMarkdownResponse(BaseModel):
 
 
 class TemplateMarkdownUpdateRequest(BaseModel):
-    content: str = Field(default="", description="Markdown template content")
+    content: str = Field(default="", description="Содержимое Markdown-шаблона")
 
 
 class UsageResetRequest(BaseModel):
-    user_email: Optional[str] = Field(default=None, description="Reset usage for this user only")
-    model: Optional[str] = Field(default=None, description="Reset usage for this model only")
+    user_email: Optional[str] = Field(default=None, description="Сбросить лимит только для этого пользователя")
+    model: Optional[str] = Field(default=None, description="Сбросить лимит только для этой модели")
 
 
 class UsageResetResponse(BaseModel):
@@ -149,9 +155,9 @@ class UsageResetResponse(BaseModel):
 
 
 class UsageLimitUpdateRequest(BaseModel):
-    user_email: str = Field(..., min_length=1, description="User email")
-    model: str = Field(..., min_length=1, description="LLM model")
-    available_checks: int = Field(..., ge=0, description="Checks available after saving")
+    user_email: str = Field(..., min_length=1, description="Email пользователя")
+    model: str = Field(..., min_length=1, description="Модель LLM")
+    available_checks: int = Field(..., ge=0, description="Доступно проверок после сохранения")
 
 
 class UsageLimitUpdateResponse(BaseModel):
@@ -167,7 +173,10 @@ class CheckHistoryItem(BaseModel):
     user_email: str
     document_name: str
     template_name: Optional[str] = None
+    template_source: Optional[Literal["predefined", "uploaded", "text_input"]] = None
+    template_download_available: bool = False
     model_id: str
+    model_name: Optional[str] = None
     compliance_score: int
     errors_count: int
     result: dict[str, Any]

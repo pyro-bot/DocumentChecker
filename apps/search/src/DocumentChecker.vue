@@ -1,5 +1,5 @@
 <template>
-  <AuthLoading v-if="authChecking" />
+  <AuthLoading v-if="authChecking" :message="authLoadingMessage" />
 
   <LoginView v-else-if="!isAuthenticated" />
 
@@ -58,6 +58,7 @@ import UploadSection from './components/UploadSection.vue'
 const store = useStore()
 
 const authChecking = computed(() => store.state.authChecking)
+const authLoadingMessage = computed(() => store.state.authLoadingMessage)
 const isAuthenticated = computed(() => store.getters.isAuthenticated)
 const currentUser = computed(() => store.state.currentUser)
 const loading = computed(() => store.state.loading)

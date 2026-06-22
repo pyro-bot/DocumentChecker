@@ -15,7 +15,7 @@ services:
       MODELS_CONFIG_PATH: /app/models.yaml
       DOCTEMPLATES_DIR: /app/doctempletes
       ADMIN_LOGINS: ${ADMIN_LOGINS:-}
-      LLM_REQUESTS_PER_MINUTE: ${LLM_REQUESTS_PER_MINUTE:-1}
+      LLM_REQUESTS_PER_MINUTE: ${LLM_REQUESTS_PER_MINUTE:-0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DUCKDB_PATH: ${DUCKDB_PATH:-/app/data/document_checker.duckdb}
     volumes:

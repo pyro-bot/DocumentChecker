@@ -17,8 +17,8 @@ export const historyStore = {
   },
 
   actions: {
-    async loadHistory({ state, commit }) {
-      const data = await documentCheckerApi.fetchHistory(state.authToken)
+    async loadHistory({ state, commit }, options = {}) {
+      const data = await documentCheckerApi.fetchHistory(state.authToken, options)
       commit('setHistoryItems', data.checks || [])
     },
     async downloadHistoryReport({ state, commit }, item) {
@@ -35,6 +35,14 @@ export const historyStore = {
         downloadBlob(file.blob, file.filename)
       } catch (error) {
         commit('setGlobalError', error.message || 'Не удалось скачать исходный файл')
+      }
+    },
+    async downloadHistoryTemplate({ state, commit }, item) {
+      try {
+        const file = await documentCheckerApi.downloadHistoryTemplate(state.authToken, item)
+        downloadBlob(file.blob, file.filename)
+      } catch (error) {
+        commit('setGlobalError', error.message || 'Не удалось скачать шаблон')
       }
     },
   },

@@ -32,11 +32,11 @@ export const configStore = {
   },
 
   actions: {
-    async loadModels({ state, commit }) {
-      commit('setModels', await documentCheckerApi.fetchModels(state.authToken))
+    async loadModels({ state, commit }, options = {}) {
+      commit('setModels', await documentCheckerApi.fetchModels(state.authToken, options))
     },
-    async loadTemplates({ state, commit }) {
-      const data = await documentCheckerApi.fetchTemplates(state.authToken)
+    async loadTemplates({ state, commit }, options = {}) {
+      const data = await documentCheckerApi.fetchTemplates(state.authToken, options)
       commit('setTemplates', data.templates || [])
     },
   },

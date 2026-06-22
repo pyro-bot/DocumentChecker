@@ -45,7 +45,18 @@ function candidateTitle(candidate) {
 
 function formatAuthors(authors) {
   if (!authors?.length) return ''
-  return authors.slice(0, 3).join(', ') + (authors.length > 3 ? ' et al.' : '')
+  return authors.slice(0, 3).join(', ') + (authors.length > 3 ? ' и др.' : '')
+}
+
+function sourceLabel(source) {
+  return {
+    crossref: 'Crossref',
+    openalex: 'OpenAlex',
+    semantic_scholar: 'Semantic Scholar',
+    google_books: 'Google Books',
+    open_library: 'Open Library',
+    url_in_record: 'Ссылка из записи',
+  }[source] || source
 }
 </script>
 
@@ -113,11 +124,11 @@ function formatAuthors(authors) {
                 {{ statusLabel(reference.status) }}
               </span>
               <span class="text-sm text-gray-500">
-                confidence {{ Math.round((reference.confidence || 0) * 100) }}%
+                совпадение {{ Math.round((reference.confidence || 0) * 100) }}%
               </span>
             </div>
             <div class="mt-2 text-base font-medium leading-snug text-gray-800">
-              {{ reference.title || reference.raw }}
+              {{ reference.bibliographic_record || reference.title || reference.raw }}
             </div>
             <div v-if="reference.authors?.length || reference.year" class="mt-1 text-sm text-gray-500">
               {{ formatAuthors(reference.authors) }}<span v-if="reference.year">, {{ reference.year }}</span>
@@ -131,6 +142,15 @@ function formatAuthors(authors) {
             <div class="mb-3 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600">
               {{ reference.raw }}
             </div>
+            <a
+              v-if="reference.url"
+              :href="reference.url"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="mb-3 block break-all text-sm font-medium text-blue-700 hover:text-blue-800"
+            >
+              Электронный ресурс: {{ reference.url }}
+            </a>
 
             <div v-if="reference.candidates?.length" class="flex flex-col gap-2">
               <div class="text-sm font-semibold text-gray-500">Найденные кандидаты</div>
@@ -143,8 +163,8 @@ function formatAuthors(authors) {
                 class="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm transition-colors hover:bg-gray-100"
               >
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="font-semibold text-gray-800">{{ candidate.source }}</span>
-                  <span class="text-gray-500">{{ Math.round((candidate.confidence || 0) * 100) }}%</span>
+                  <span class="font-semibold text-gray-800">{{ sourceLabel(candidate.source) }}</span>
+                  <span class="text-gray-500">совпадение {{ Math.round((candidate.confidence || 0) * 100) }}%</span>
                   <span v-if="candidate.year" class="text-gray-500">{{ candidate.year }}</span>
                 </div>
                 <div class="mt-1 text-gray-700">{{ candidateTitle(candidate) }}</div>

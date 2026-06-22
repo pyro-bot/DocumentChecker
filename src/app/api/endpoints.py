@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import shutil
@@ -103,19 +104,35 @@ def _model_response(model: ModelDefinition, user: UserRecord) -> ModelResponse:
         name=model.name,
         description=model.description,
         usage_limit=effective_limit,
+        rate_limit=model.rate_limit,
         context_window_tokens=model.context_window_tokens,
         used_count=used_count,
         remaining=remaining,
     )
 
 
+def _model_display_name(model_id: str) -> str | None:
+    try:
+        model = load_models_config().get(model_id)
+    except ModelsConfigError:
+        return None
+    return model.name if model else None
+
+
 def _history_item(record: CheckHistoryRecord) -> CheckHistoryItem:
+    template_source = record.template_source
+    if template_source is None and record.template_name == "text-input":
+        template_source = "text_input"
+
     return CheckHistoryItem(
         id=record.id,
         user_email=record.user_email,
         document_name=record.document_name,
         template_name=record.template_name,
+        template_source=template_source,
+        template_download_available=bool(record.template_file_path and Path(record.template_file_path).exists()),
         model_id=record.model_id,
+        model_name=_model_display_name(record.model_id),
         compliance_score=record.compliance_score,
         errors_count=record.errors_count,
         result=record.result,
@@ -132,7 +149,7 @@ def _get_model_or_400(model_id: str) -> ModelDefinition:
 
     model = config.get(model_id)
     if model is None:
-        raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
+        raise HTTPException(status_code=400, detail=f"Неизвестная модель: {model_id}")
     return model
 
 
@@ -146,7 +163,7 @@ def _consume_model_usage(user: UserRecord, model: ModelDefinition) -> None:
     if used_count is None:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Usage limit exceeded for model: {model.id}",
+            detail=f"Лимит проверок для модели исчерпан: {model.id}",
         )
 
 
@@ -155,11 +172,15 @@ def _safe_filename(filename: str) -> str:
     return cleaned or "document.docx"
 
 
-def _store_source_file(path: Path, original_filename: str) -> str:
+def _store_check_file(path: Path, original_filename: str) -> str:
     CHECK_FILES_DIR.mkdir(parents=True, exist_ok=True)
     target = CHECK_FILES_DIR / f"{uuid.uuid4()}_{_safe_filename(original_filename)}"
     shutil.copyfile(path, target)
     return str(target)
+
+
+def _store_source_file(path: Path, original_filename: str) -> str:
+    return _store_check_file(path, original_filename)
 
 
 def _is_markdown_file(path: Path) -> bool:
@@ -180,18 +201,50 @@ def _read_markdown_template(path: Path) -> dict:
             "success": False,
             "latex_content": None,
             "file_path": None,
-            "error": "Markdown template must be UTF-8 encoded",
+            "error": "Markdown-шаблон должен быть в кодировке UTF-8",
         }
 
 
 def _require_history_access(record: CheckHistoryRecord, user: UserRecord) -> None:
     if record.user_email != user.email and user_role(user) != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ запрещен")
 
 
 def _download_filename(prefix: str, name: str, suffix: str) -> str:
     stem = Path(name).stem or prefix
     return f"{prefix}_{stem}{suffix}"
+
+
+async def _wait_for_llm_turn(model: ModelDefinition) -> None:
+    await llm_request_queue.wait_for_turn_async(model.id, model.rate_limit)
+
+
+async def _compare_documents_async(
+    template_content: str,
+    document_content: str,
+    model: str,
+    parallel: bool = True,
+) -> dict:
+    return await asyncio.to_thread(
+        ComparatorService.compare,
+        template_content=template_content,
+        document_content=document_content,
+        model=model,
+        parallel=parallel,
+    )
+
+
+async def _check_bibliography_async(
+    document_content: str,
+    model: str,
+    max_references: int,
+) -> dict:
+    return await asyncio.to_thread(
+        BibliographyCheckerService.check,
+        document_content=document_content,
+        model=model,
+        max_references=max_references,
+    )
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -267,14 +320,14 @@ async def get_template_markdown(
             None,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Template not found") from exc
+        raise HTTPException(status_code=404, detail="Шаблон не найден") from exc
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=415, detail="Markdown template must be UTF-8 encoded") from exc
+        raise HTTPException(status_code=415, detail="Markdown-шаблон должен быть в кодировке UTF-8") from exc
     except ValueError as exc:
         raise HTTPException(status_code=415, detail=str(exc)) from exc
 
     if template is None:
-        raise HTTPException(status_code=404, detail="Template not found")
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
 
     return TemplateMarkdownResponse(
         id=template.id,
@@ -297,7 +350,7 @@ async def download_check_report(
 ):
     record = CheckHistoryRepository().get_by_id(check_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="Check result not found")
+        raise HTTPException(status_code=404, detail="Результат проверки не найден")
     _require_history_access(record, current_user)
 
     filename = _download_filename("report", record.document_name, ".pdf")
@@ -315,15 +368,34 @@ async def download_source_file(
 ):
     record = CheckHistoryRepository().get_by_id(check_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="Check result not found")
+        raise HTTPException(status_code=404, detail="Результат проверки не найден")
     _require_history_access(record, current_user)
     if not record.source_file_path or not Path(record.source_file_path).exists():
-        raise HTTPException(status_code=404, detail="Source file not found")
+        raise HTTPException(status_code=404, detail="Исходный файл не найден")
 
     return FileResponse(
         record.source_file_path,
         media_type=record.source_content_type or "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=record.document_name,
+    )
+
+
+@router.get("/api/history/{check_id}/template")
+async def download_template_file(
+    check_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+):
+    record = CheckHistoryRepository().get_by_id(check_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Результат проверки не найден")
+    _require_history_access(record, current_user)
+    if not record.template_file_path or not Path(record.template_file_path).exists():
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
+
+    return FileResponse(
+        record.template_file_path,
+        media_type=record.template_content_type or "application/octet-stream",
+        filename=record.template_name or Path(record.template_file_path).name,
     )
 
 
@@ -352,9 +424,9 @@ async def update_template_markdown(
     try:
         template = TemplateService().update_markdown_template(template_id, req.content)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Template not found") from exc
+        raise HTTPException(status_code=404, detail="Шаблон не найден") from exc
     except UnicodeEncodeError as exc:
-        raise HTTPException(status_code=400, detail="Markdown template must be UTF-8 encodable") from exc
+        raise HTTPException(status_code=400, detail="Markdown-шаблон должен поддерживать кодировку UTF-8") from exc
     except ValueError as exc:
         raise HTTPException(status_code=415, detail=str(exc)) from exc
     except OSError as exc:
@@ -421,13 +493,16 @@ async def set_usage_limit(
     model = _get_model_or_400(req.model)
     user = UserRepository().get_by_email(req.user_email)
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-    updated = ModelUsageRepository().set_available_checks(
-        user_email=user.email,
-        model_id=model.id,
-        available_checks=req.available_checks,
-    )
+    try:
+        updated = ModelUsageRepository().set_available_checks(
+            user_email=user.email,
+            model_id=model.id,
+            available_checks=req.available_checks,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return UsageLimitUpdateResponse(
         user_email=user.email,
         model=model.id,
@@ -469,9 +544,9 @@ async def check_bibliography(
 ):
     selected_model = _get_model_or_400(bibliography_model_id())
     _consume_model_usage(current_user, selected_model)
-    llm_request_queue.wait_for_turn(selected_model.id)
+    await _wait_for_llm_turn(selected_model)
 
-    result = BibliographyCheckerService.check(
+    result = await _check_bibliography_async(
         document_content=req.document_content,
         model=selected_model.id,
         max_references=req.max_references,
@@ -491,11 +566,11 @@ async def check_bibliography_upload(
     current_user: UserRecord = Depends(get_current_user),
 ):
     if max_references < 1 or max_references > 100:
-        raise HTTPException(status_code=400, detail="max_references must be between 1 and 100")
+        raise HTTPException(status_code=400, detail="Количество источников должно быть от 1 до 100")
 
     suffix = Path(document_file.filename or "").suffix.lower()
     if suffix not in {".docx", ".txt", ".md", ".markdown"}:
-        raise HTTPException(status_code=400, detail="Supported files: .docx, .txt, .md, .markdown")
+        raise HTTPException(status_code=400, detail="Поддерживаются файлы .docx, .txt, .md и .markdown")
 
     selected_model = _get_model_or_400(bibliography_model_id())
     _consume_model_usage(current_user, selected_model)
@@ -518,8 +593,8 @@ async def check_bibliography_upload(
             elif suffix in {".txt", ".md", ".markdown"}:
                 document_content = doc_path.read_text(encoding="utf-8")
 
-            llm_request_queue.wait_for_turn(selected_model.id)
-            result = BibliographyCheckerService.check(
+            await _wait_for_llm_turn(selected_model)
+            result = await _check_bibliography_async(
                 document_content=document_content,
                 model=selected_model.id,
                 max_references=max_references,
@@ -532,7 +607,7 @@ async def check_bibliography_upload(
                 history_repo = CheckHistoryRepository()
                 history_record = history_repo.get_by_id(check_id)
                 if history_record is None:
-                    raise HTTPException(status_code=404, detail="Check result not found")
+                    raise HTTPException(status_code=404, detail="Результат проверки не найден")
                 _require_history_access(history_record, current_user)
                 updated_result = {
                     **history_record.result,
@@ -542,7 +617,7 @@ async def check_bibliography_upload(
 
             return BibliographyCheckResponse(**result["data"])
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=415, detail="Text files must be UTF-8 encoded") from exc
+        raise HTTPException(status_code=415, detail="Текстовые файлы должны быть в кодировке UTF-8") from exc
     except HTTPException:
         raise
     except Exception:
@@ -558,8 +633,8 @@ async def compare_documents(
     try:
         model = _get_model_or_400(req.model)
         _consume_model_usage(current_user, model)
-        llm_request_queue.wait_for_turn(model.id)
-        result = ComparatorService.compare(
+        await _wait_for_llm_turn(model)
+        result = await _compare_documents_async(
             template_content=req.template_content,
             document_content=req.document_content,
             model=model.id,
@@ -591,6 +666,7 @@ async def compare_documents(
                 },
                 source_file_path=None,
                 source_content_type=None,
+                template_source="text_input",
             ).id,
         )
     except HTTPException:
@@ -627,18 +703,31 @@ async def validate_and_compare(
 
             logger.info("validate-upload saving uploaded files")
             doc_path = tmpdir / f"doc_{document_file.filename}"
+            template_service = TemplateService()
+            history_template_name: str | None = None
+            history_template_source: str | None = None
+            uploaded_template_path: Path | None = None
 
             if template_name:
                 try:
-                    tpl_path = TemplateService().resolve_template_path(template_name)
+                    tpl_path = template_service.resolve_template_path(template_name)
                 except FileNotFoundError as exc:
-                    raise HTTPException(status_code=404, detail="Template not found") from exc
+                    raise HTTPException(status_code=404, detail="Шаблон не найден") from exc
+                template_meta = next(
+                    (item for item in template_service.list_templates() if item.id == template_name),
+                    None,
+                )
+                history_template_name = template_meta.name if template_meta else Path(template_name).stem
+                history_template_source = "predefined"
             elif template_file is not None:
                 tpl_path = tmpdir / f"tpl_{template_file.filename}"
                 with tpl_path.open("wb") as f:
                     shutil.copyfileobj(template_file.file, f)
+                history_template_name = template_file.filename
+                history_template_source = "uploaded"
+                uploaded_template_path = tpl_path
             else:
-                raise HTTPException(status_code=400, detail="Template file or template_name is required")
+                raise HTTPException(status_code=400, detail="Нужно выбрать файл шаблона или template_name")
 
             with doc_path.open("wb") as f:
                 shutil.copyfileobj(document_file.file, f)
@@ -663,8 +752,8 @@ async def validate_and_compare(
                 raise HTTPException(status_code=500, detail=f"Документ: {doc_res['error']}")
 
             logger.info("validate-upload comparing documents")
-            llm_request_queue.wait_for_turn(selected_model.id)
-            result = ComparatorService.compare(
+            await _wait_for_llm_turn(selected_model)
+            result = await _compare_documents_async(
                 template_content=tpl_res["latex_content"],
                 document_content=doc_res["latex_content"],
                 model=selected_model.id,
@@ -683,14 +772,22 @@ async def validate_and_compare(
                 "warnings": data.get("warnings", []),
             }
             source_path = _store_source_file(doc_path, document_file.filename)
+            template_history_file_path = (
+                _store_check_file(uploaded_template_path, template_file.filename)
+                if uploaded_template_path is not None and template_file is not None
+                else None
+            )
             history_record = CheckHistoryRepository().create(
                 user_email=current_user.email,
                 document_name=document_file.filename,
-                template_name=template_name or (template_file.filename if template_file else None),
+                template_name=history_template_name,
                 model_id=selected_model.id,
                 result=result_payload,
                 source_file_path=source_path,
                 source_content_type=document_file.content_type,
+                template_source=history_template_source,
+                template_file_path=template_history_file_path,
+                template_content_type=template_file.content_type if template_file else None,
             )
 
             logger.info(

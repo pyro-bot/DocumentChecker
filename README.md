@@ -55,10 +55,11 @@ models:
     name: GPT OSS 120B Cloud
     description: Default cloud model for document checks.
     usage_limit: 100
+    rate_limit: 5
     context_window_tokens: 131072
 ```
 
-`usage_limit` is the per-user number of checks allowed for the model. Use an empty value or omit it for an unlimited model. `context_window_tokens` is the model context length used to trim oversized documents before sending them to the LLM. You can also use `context_window`, `max_context_tokens`, or `max_context_window` as aliases. Context length priority is: model setting, `LLM_CONTEXT_WINDOW_TOKENS`, API metadata, then model family defaults. `endpoints` can contain multiple LLM API URLs; every model can reference one endpoint with `endpoint`, and every endpoint can read its own key from `.env` through `api_key_env`.
+`usage_limit` is the per-user number of checks allowed for the model. Use an empty value or omit it for an unlimited model. `rate_limit` is the per-process requests-per-minute limit for that model; use `0` to disable throttling. `context_window_tokens` is the model context length used to trim oversized documents before sending them to the LLM. You can also use `context_window`, `max_context_tokens`, or `max_context_window` as aliases. Context length priority is: model setting, `LLM_CONTEXT_WINDOW_TOKENS`, API metadata, then model family defaults. `endpoints` can contain multiple LLM API URLs; every model can reference one endpoint with `endpoint`, and every endpoint can read its own key from `.env` through `api_key_env`.
 
 For Ollama Cloud direct API access, set the key in `.env`:
 ```env
@@ -124,7 +125,7 @@ LLM_API_URL=
 LLM_API_BASE_URL=https://api.openai.com/v1
 LLM_API_FORMAT=openai
 AI_PROXY_KEY=sk-...
-LLM_REQUESTS_PER_MINUTE=1
+LLM_REQUESTS_PER_MINUTE=0
 ```
 
 Those legacy `LLM_API_*` values are still supported for models without an endpoint in `models.yaml`.
@@ -135,7 +136,7 @@ LLM_API_URL=
 LLM_API_BASE_URL=https://api.timeweb.ai/v1
 LLM_API_FORMAT=openai
 AI_PROXY_KEY=<YOUR_AI_PROXY_KEY>
-LLM_REQUESTS_PER_MINUTE=1
+LLM_REQUESTS_PER_MINUTE=0
 ```
 
 Backend (Python/FastAPI)

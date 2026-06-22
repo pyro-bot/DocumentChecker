@@ -17,3 +17,24 @@ export function normalizeHistoryItem(item) {
     groupedErrors: buildGroupedErrors(result.errors || []),
   }
 }
+
+export function historyModelLabel(item) {
+  if (item.model_name && item.model_id && item.model_name !== item.model_id) {
+    return `${item.model_name} (${item.model_id})`
+  }
+  return item.model_name || item.model_id || 'Не указана'
+}
+
+export function historyTemplateLabel(item) {
+  const name = item.template_name || 'без названия'
+  if (item.template_source === 'predefined') {
+    return `по готовому шаблону: ${name}`
+  }
+  if (item.template_source === 'uploaded') {
+    return `шаблон загружен пользователем: ${name}`
+  }
+  if (item.template_source === 'text_input') {
+    return 'шаблон введен текстом'
+  }
+  return item.template_name ? `шаблон: ${item.template_name}` : 'шаблон не указан'
+}
